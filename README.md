@@ -29,7 +29,7 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd reset` | Reset window position |
 | `/vanadial` | Alias for `/vd` |
 
-Legacy `/vd vtships`-style keys are not used on standalone; use the subcommands above.
+Timer subcommands also accept `vtships`, `vtboats`, `vtrse`, and `vtlunar` (same as `ships`, `boats`, `rse`, `lunar`) if you are used to XIUI’s `/xiui vtships` naming.
 
 ## Requirements
 

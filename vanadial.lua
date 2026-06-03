@@ -445,10 +445,10 @@ ashita.events.register('command', 'vd_command', function(e)
         print("[Vana'Dial] Commands:");
         print('  /vd               - Toggle visibility');
         print('  /vd config        - Open config window');
-        print('  /vd ships         - Toggle airship timers');
-        print('  /vd boats         - Toggle boat timers');
-        print('  /vd rse           - Toggle RSE timers');
-        print('  /vd lunar         - Toggle lunar timers');
+        print('  /vd ships         - Toggle airship timers (vtships ok)');
+        print('  /vd boats         - Toggle boat timers (vtboats ok)');
+        print('  /vd rse           - Toggle RSE timers (vtrse ok)');
+        print('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
         print('  /vd reset         - Reset window position');
         print('  /vanadial         - Alias for /vd');
     end
