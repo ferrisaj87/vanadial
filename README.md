@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/vanadial-logo.png" alt="Vana'Dial" width="320">
+  <img src="docs/vanadial-logo-source.png" alt="Vana'Dial" width="640">
 </p>
 
 # Vana'Dial
