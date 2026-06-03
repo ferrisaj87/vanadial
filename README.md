@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/vanadial-logo.png" alt="Vana'Dial" width="320">
+</p>
+
 # Vana'Dial
 
 Standalone Ashita v4 addon for Horizon XI / FFXI: Vana'diel time, elemental days, moon phase, zone weather, and transport timers (airships, boats, RSE, lunar).
