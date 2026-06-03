@@ -1,0 +1,455 @@
+--[[
+* Vana'Dial - Standalone Ashita Addon
+*
+* Displays Vana'diel time, day element, moon phase, and zone weather.
+* Includes transport and RSE timer panel.
+*
+* Commands:
+*   /vd                   - Toggle Vana'Dial visibility
+*   /vd config            - Open/close the configuration window
+*   /vd ships             - Open/close airship timers section
+*   /vd boats             - Open/close boat timers section (expands all sub-routes)
+*   /vd rse               - Open/close RSE timer section
+*   /vd lunar             - Open/close lunar timer section
+*   /vd reset             - Reset window position to default
+]]--
+
+addon.name    = 'vanadial';
+addon.author  = 'Ferris';
+addon.version = '1.0.0';
+addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
+addon.link    = 'https://github.com/ferrisaj87/vanadial';
+
+require('common');
+local settings = require('settings');
+local imgui    = require('imgui');
+local bit      = require('bit');
+
+-- ── Bootstrap globals consumed by display.lua / popups.lua / bundled libs ─────
+-- XIUI's handlers/helpers.lua exposes these as bare globals; we mirror that here
+-- from our bundled color lib so windowbackground.lua, imtext.lua, etc. work.
+local colorLib          = require('libs.color');
+ARGBToRGBA              = colorLib.ARGBToRGBA;
+RGBAToARGB              = colorLib.RGBAToARGB;
+ARGBToImGui             = colorLib.ARGBToImGui;
+ImGuiToARGB             = colorLib.ImGuiToARGB;
+ARGBToABGR              = colorLib.ARGBToABGR;
+HexToImGui              = colorLib.HexToImGui;
+ImGuiToHex              = colorLib.ImGuiToHex;
+HexToARGB               = colorLib.HexToARGB;
+HexToU32                = colorLib.HexToU32;
+ARGBToU32               = colorLib.ARGBToU32;
+ColorTableToARGB        = colorLib.ColorTableToARGB;
+InvalidateColorCaches   = colorLib.InvalidateColorCaches;
+GetColorSetting         = colorLib.GetColorSetting;
+GetGradientSetting      = colorLib.GetGradientSetting;
+GetGradientTextColor    = colorLib.GetGradientTextColor;
+
+-- ── Settings ──────────────────────────────────────────────────────────────────
+local defaults = T{
+    showVanaDial                 = true,
+    vanaTimeHideOnMenuFocus      = false,
+    vanaTimeVTElementColor       = false,
+    vanaTimeShowLocalTime        = true,
+    vanaTimeShowMoonPercent      = true,
+    vanaTimeShowPastFuture       = true,
+    vanaTimePastFutureOpacity    = 0.35,
+    vanaTimePlainDayIcons        = false,
+    vanaTimeShowWeaknessBadge    = true,
+    vanaTimeShowWeather          = true,
+    vanaTimeWeatherSide          = 'right',
+    vanaTimeWeatherAlign         = 'left',
+    vanaTimeWeatherCustomScale   = false,
+    vanaTimeWeatherIconSize      = 28,
+    vanaTimeWeatherAdjustElemental   = false,
+    vanaTimeWeatherElementalIconSize = 42,
+    vanaTimeWeatherHideNonElemental  = false,
+    vanaTimeTodPopup             = true,
+    vanaTimeTodSide              = 'left',
+    vanaTimeTodAlign             = 'left',
+    vanaTimeTodCustomScale       = false,
+    vanaTimeTodIconSize          = 28,
+    vanaTimeTodShowTimer         = true,
+    vanaTimeScale                = 1.0,
+    vanaTimeFontSize             = 12,
+    vanaTimeFontBold             = true,  -- match XIUI default fontWeight = 'Bold'
+    vanaTimeIconSize             = 28,
+    vanaTimeBgScale              = 1.0,
+    vanaTimeBorderScale          = 1.0,
+    vanaTimeBackgroundOpacity    = 0.85,
+    vanaTimeBorderOpacity        = 1.0,
+    vanaTimeTooltipDirection     = 'above',
+    vanaTimeShowTooltip          = true,
+    vanaTimeTooltipFenrir        = true,
+    vanaTimeTooltipSeleneBow     = true,
+    vanaTimeShowSettingsBtn      = true,
+    vanaTimeEnableTooltips       = true,
+    vanaTimeTipVT                = true,
+    vanaTimeTipLT                = true,
+    vanaTimeTipTod               = true,
+    vanaTimeTipWeather           = true,
+    vanaTimeShowTimers           = true,
+    vanaTimeTimerSide            = 'above',
+    vanaTimeTimersFontSize       = 12,
+    vanaTimeTimersAutoCloseClick = false,
+    vanaTimeTimersAutoCloseIdle  = false,
+    vanaTimeTimersAutoCloseIdleSec = 5,
+    vanaTimeTimerSections = T{
+        airships = false,
+        boats    = false,
+        rse      = false,
+        lunar    = false,
+    },
+    windowPositions  = T{},
+    colorCustomization = T{
+        vanaTime = T{
+            bgColor          = 0xFF000000,
+            borderColor      = 0xFFFFFFFF,
+            textColor        = 0xFFFFFFFF,
+            moonFullColor    = 0xFF88CCFF,  -- moonlit blue (matches in-game full moon pulse)
+            moonNewColor     = 0xFFFF4444,
+            todTimerColor    = 0xFFFFFFFF,
+            elementFire      = 0xFFFF4500,
+            elementEarth     = 0xFFB8860B,
+            elementWater     = 0xFF1E90FF,
+            elementWind      = 0xFF32CD32,
+            elementIce       = 0xFF87CEEB,
+            elementLightning = 0xFFBF5FFF,
+            elementLight     = 0xFFFFFFE0,
+            elementDark      = 0xFF2A0850,
+        },
+    },
+};
+
+-- gConfig is read as a bare global by display.lua and popups.lua.
+-- We load the settings and expose them here before requiring those modules.
+-- settings.load() persists to Game/config/addons/vanadial/<Char_ServerId>/settings.lua
+-- automatically (one folder per character, same scheme XIUI uses).
+gConfig = settings.load(defaults);
+-- Settings copied from the old vanatime addon folder (optional manual migration).
+if gConfig.showVanaTime ~= nil and gConfig.showVanaDial == nil then
+    gConfig.showVanaDial = gConfig.showVanaTime;
+end
+-- appliedPositions is per-session only; reset it so saved positions are applied
+-- on each load (do not persist this through settings.save).
+gConfig.appliedPositions = {};
+
+-- Debounced settings persistence. SaveWindowPosition() runs every frame while a
+-- window is dragged, so we never write to disk inline — instead we flag the
+-- settings dirty and flush once movement has settled (see the d3d_present
+-- handler). This keeps drag positions across reloads without thrashing disk I/O.
+local _settingsDirty   = false;
+local _settingsDirtyAt = 0;
+local function MarkSettingsDirty()
+    _settingsDirty   = true;
+    _settingsDirtyAt = os.clock();
+end
+
+-- Seed a distinct default position the first time the standalone runs so it does
+-- Default position is offset from typical XIUI widget placement so both can
+-- coexist without stacking on first run.
+local WINDOW_KEY = 'VanaDial';
+if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
+-- Migrate position saved under the old standalone name.
+if gConfig.windowPositions['VanaTime'] and not gConfig.windowPositions[WINDOW_KEY] then
+    gConfig.windowPositions[WINDOW_KEY] = gConfig.windowPositions['VanaTime'];
+end
+if not gConfig.windowPositions[WINDOW_KEY] then
+    gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
+    settings.save();
+end
+
+-- ── Config window state ───────────────────────────────────────────────────────
+local _configOpen = false;
+
+-- display.lua calls VanaDial_ToggleConfig when the gear icon is clicked.
+VanaDial_ToggleConfig = function()
+    _configOpen = not _configOpen;
+end;
+
+-- ── Window helper globals (mirror of XIUI handlers/helpers.lua) ───────────────
+-- display.lua calls these as bare globals; we provide standalone equivalents.
+
+local _baseWinFlagsCache = nil;
+function GetBaseWindowFlags(lockPositions)
+    if _baseWinFlagsCache == nil then
+        _baseWinFlagsCache = bit.bor(
+            ImGuiWindowFlags_NoDecoration,
+            ImGuiWindowFlags_AlwaysAutoResize,
+            ImGuiWindowFlags_NoFocusOnAppearing,
+            ImGuiWindowFlags_NoNav,
+            ImGuiWindowFlags_NoBackground,
+            ImGuiWindowFlags_NoBringToFrontOnFocus,
+            ImGuiWindowFlags_NoDocking
+        );
+    end
+    if lockPositions then
+        return bit.bor(_baseWinFlagsCache, ImGuiWindowFlags_NoMove);
+    end
+    return _baseWinFlagsCache;
+end
+
+function ApplyWindowPosition(windowName)
+    if gConfig and gConfig.windowPositions and gConfig.windowPositions[windowName] then
+        if not gConfig.appliedPositions then gConfig.appliedPositions = {}; end
+        if not gConfig.appliedPositions[windowName] then
+            local pos = gConfig.windowPositions[windowName];
+            imgui.SetNextWindowPos({pos.x, pos.y}, ImGuiCond_Always);
+            gConfig.appliedPositions[windowName] = true;
+            return true;
+        end
+    end
+    return false;
+end
+
+function SaveWindowPosition(windowName)
+    if not gConfig then return; end
+    local x, y = imgui.GetWindowPos();
+    if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
+    local saved = gConfig.windowPositions[windowName];
+    if not saved then
+        gConfig.windowPositions[windowName] = T{ x = x, y = y };
+        MarkSettingsDirty();
+    elseif saved.x ~= x or saved.y ~= y then
+        saved.x = x; saved.y = y;
+        MarkSettingsDirty();
+    end
+end
+
+-- ── ImGui compatibility shims ─────────────────────────────────────────────────
+-- Patches missing constants (ImGuiWindowFlags_NoDocking, ImGuiCol_Tab*, etc.)
+-- that exist on Ashita 4.3 but not on the main branch, or vice-versa.
+-- Must run before any module that builds window-flag constants at load time.
+require('libs.imgui_compat');
+
+-- ── Load Vana'Dial modules ────────────────────────────────────────────────────
+-- Loaded AFTER gConfig and globals are set so they can read gConfig at
+-- module-load time (some constants reference gConfig at the file scope).
+local display = require('display');
+local popups  = require('popups');
+local config  = require('config');
+local imtext  = require('libs.imtext');
+
+-- ── Module state ──────────────────────────────────────────────────────────────
+local hidden             = false;
+local weatherId          = 0;
+local pendingWeatherRead = false;
+local pendingWeatherTime = 0;
+
+-- ── Weather memory reader ─────────────────────────────────────────────────────
+local WEATHER_SIG  = '66A1????????663D????72';
+local _weatherPtr  = nil;
+
+local function memory_find_compat(pattern, offset, scan)
+    local result = ashita.memory.find('FFXiMain.dll', 0, pattern, offset, scan);
+    if result ~= nil and result ~= 0 then return result end;
+    return ashita.memory.find(0, 0, pattern, offset, scan);
+end
+
+local function ResolveWeatherPtr()
+    local ok, result = pcall(function()
+        local base = memory_find_compat(WEATHER_SIG, 0, 0);
+        if not base or base == 0 then return nil end;
+        local ptr = ashita.memory.read_uint32(base + 0x02);
+        if not ptr or ptr == 0 then return nil end;
+        return ptr;
+    end);
+    if ok and type(result) == 'number' and result ~= 0 then return result end;
+    return nil;
+end
+
+local function GetWeatherSafe()
+    local ok, result = pcall(function()
+        if not _weatherPtr then
+            _weatherPtr = ResolveWeatherPtr();
+        end
+        if not _weatherPtr then return nil end;
+        local w = ashita.memory.read_uint8(_weatherPtr);
+        if type(w) ~= 'number' or w > 19 then
+            _weatherPtr = nil;
+            return nil;
+        end
+        return w;
+    end);
+    if ok and type(result) == 'number' then return result end;
+    _weatherPtr = nil;
+    return nil;
+end
+
+-- ── Game menu detection (for "Hide When Menu Open") ───────────────────────────
+-- Mirrors XIUI's core/gamestate.lua. Resolves a pointer into FFXiMain.dll that
+-- exposes the currently focused menu's name, then treats the module as hidden
+-- while a "real" menu (inventory, map, etc.) is open. Combat/chat sub-menus are
+-- ignored so the clock doesn't vanish every time you open the action menu.
+-- Signature courtesy of Velyn (same one XIUI uses).
+local _pGameMenu = nil;
+local function ResolveGameMenuPtr()
+    local ok, result = pcall(function()
+        return ashita.memory.find('FFXiMain.dll', 0, '8B480C85C974??8B510885D274??3B05', 16, 0);
+    end);
+    if ok and type(result) == 'number' and result ~= 0 then return result end;
+    return nil;
+end
+
+local function GetMenuName()
+    if not _pGameMenu then _pGameMenu = ResolveGameMenuPtr(); end
+    if not _pGameMenu then return ''; end
+    local ok, name = pcall(function()
+        local subPointer = ashita.memory.read_uint32(_pGameMenu);
+        if subPointer == 0 then return ''; end
+        local subValue = ashita.memory.read_uint32(subPointer);
+        if subValue == 0 then return ''; end
+        local menuHeader = ashita.memory.read_uint32(subValue + 4);
+        if menuHeader == 0 then return ''; end
+        local menuName = ashita.memory.read_string(menuHeader + 0x46, 16);
+        return string.gsub(menuName, '\x00', '');
+    end);
+    if ok and type(name) == 'string' then return name; end
+    _pGameMenu = nil;  -- bad read; re-scan next time
+    return '';
+end
+
+-- Menus that should NOT trigger hide (chat input, combat sub-menus, etc.).
+local IGNORED_MENUS = {
+    inline   = true,  -- chat box / text input
+    playermo = true,  -- player menu (self-target/engage)
+    chatctrl = true,  -- chat mode select
+    magselec = true,  -- magic side menu
+    magic    = true,  -- magic / trust menu
+    abiselec = true,  -- abilities side menu
+    ability  = true,  -- JA, WS, pet commands
+};
+
+local function IsGameMenuOpen()
+    local menuName = GetMenuName():gsub('%s+$', '');
+    if menuName == '' then return false; end
+    local shortName = menuName:match('^menu%s+(.+)') or menuName;
+    return not IGNORED_MENUS[shortName];
+end
+
+-- ── Events ────────────────────────────────────────────────────────────────────
+
+ashita.events.register('load', 'vd_load', function()
+    -- Load all fonts NOW, during the load event (outside any d3d_present frame).
+    -- imgui.AddFontFromFileTTF mutates the font atlas; doing it mid-frame on the
+    -- Ashita main lineage causes EXCEPTION_ACCESS_VIOLATION. Vana'Dial only uses
+    -- Tahoma, so prewarm just that family (regular + bold).
+    imtext.PrewarmFonts({'Tahoma'});
+    display.Initialize();
+    local w = GetWeatherSafe();
+    if w ~= nil then weatherId = w; end
+end);
+
+ashita.events.register('unload', 'vd_unload', function()
+    weatherId = 0;
+    pendingWeatherRead = false;
+    _weatherPtr = nil;
+    display.Cleanup();
+    -- Flush any pending window-position changes so a drag right before unload
+    -- (or reload) is never lost.
+    settings.save();
+end);
+
+ashita.events.register('d3d_present', 'vd_present', function()
+    if not hidden then
+        -- Hide the clock + popups while a game menu is open, if enabled. The
+        -- config window (below) is intentionally NOT gated so it stays usable.
+        local menuHidden = gConfig.vanaTimeHideOnMenuFocus and IsGameMenuOpen();
+
+        if not menuHidden then
+            -- Deferred weather re-read after zone-in.
+            if pendingWeatherRead and os.time() >= pendingWeatherTime then
+                pendingWeatherRead = false;
+                local w = GetWeatherSafe();
+                if w ~= nil then weatherId = w; end
+            end
+
+            display.DrawWindow(weatherId);
+        end
+    end
+
+    if _configOpen then
+        config.Draw(_configOpen, function(open) _configOpen = open; end);
+    end
+
+    -- Debounced persistence: write the dragged window position to disk ~0.75s
+    -- after the last movement, so positions survive reload without saving on
+    -- every frame of a drag.
+    if _settingsDirty and (os.clock() - _settingsDirtyAt) > 0.75 then
+        _settingsDirty = false;
+        settings.save();
+    end
+end);
+
+ashita.events.register('packet_in', 'vd_packet', function(e)
+    if e.id == 0x000A then
+        weatherId          = 0;
+        pendingWeatherRead = true;
+        pendingWeatherTime = os.time() + 2;
+        return;
+    end
+    if e.id == 0x057 then
+        local w = GetWeatherSafe();
+        if w ~= nil and w > 0 then weatherId = w; end
+        pendingWeatherRead = true;
+        pendingWeatherTime = os.time() + 1;
+    end
+end);
+
+ashita.events.register('command', 'vd_command', function(e)
+    local args = e.command:args();
+    if #args == 0 then return; end
+
+    local cmd = args[1]:lower();
+    if cmd ~= '/vd' and cmd ~= '/vanadial' then return; end
+
+    e.blocked = true;
+
+    local sub = args[2] and args[2]:lower() or '';
+
+    if sub == '' then
+        hidden = not hidden;
+        if hidden then
+            print("[Vana'Dial] Hidden.");
+        else
+            print("[Vana'Dial] Shown.");
+        end
+
+    elseif sub == 'config' then
+        _configOpen = not _configOpen;
+
+    elseif sub == 'ships' or sub == 'vtships' then
+        hidden = false;
+        popups.OpenTimersSection('vdships');
+
+    elseif sub == 'boats' or sub == 'vtboats' then
+        hidden = false;
+        popups.OpenTimersSection('vdboats');
+
+    elseif sub == 'rse' or sub == 'vtrse' then
+        hidden = false;
+        popups.OpenTimersSection('vdrse');
+
+    elseif sub == 'lunar' or sub == 'vtlunar' then
+        hidden = false;
+        popups.OpenTimersSection('vdlunar');
+
+    elseif sub == 'reset' then
+        if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
+        gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
+        gConfig.appliedPositions = {};
+        settings.save();
+        print("[Vana'Dial] Position reset to (100, 100).");
+
+    else
+        print("[Vana'Dial] Commands:");
+        print('  /vd               - Toggle visibility');
+        print('  /vd config        - Open config window');
+        print('  /vd ships         - Toggle airship timers');
+        print('  /vd boats         - Toggle boat timers');
+        print('  /vd rse           - Toggle RSE timers');
+        print('  /vd lunar         - Toggle lunar timers');
+        print('  /vd reset         - Reset window position');
+        print('  /vanadial         - Alias for /vd');
+    end
+end);
