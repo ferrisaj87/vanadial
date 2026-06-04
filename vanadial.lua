@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.5';
+addon.version = '1.2.6';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -161,6 +161,9 @@ local function MarkSettingsDirty()
 end
 
 local function EnsureDefaultWindowPosition(persist)
+    if not gConfig.windowPositions then
+        gConfig.windowPositions = T{};
+    end
     if not gConfig.windowPositions[WINDOW_KEY] then
         gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
         if persist then
@@ -174,7 +177,11 @@ local function OnCharacterSettingsReady(s)
         gConfig = s;
     end
     MigrateWindowSettings();
-    gConfig.appliedPositions = {};
+    if not gConfig.appliedPositions then
+        gConfig.appliedPositions = T{};
+    else
+        gConfig.appliedPositions[WINDOW_KEY] = nil;
+    end
     EnsureDefaultWindowPosition(true);
 end
 

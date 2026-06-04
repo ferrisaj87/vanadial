@@ -183,7 +183,7 @@ function M.RunUpdate()
         return;
     end
 
-    PrintMsg('Updating Vana''Dial....');
+    PrintMsg("Updating Vana'Dial....");
 
     local allOk = true;
 
