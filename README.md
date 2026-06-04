@@ -35,7 +35,7 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd checkupdate` | Check GitHub for a newer version |
 | `/vanadial` | Alias for `/vd` |
 
-On login, Vana'Dial checks GitHub once and prints a chat message if a newer release is available.
+On login, Vana'Dial checks GitHub once (after a short delay) and prints a chat message if a newer version is available.
 
 **Updating:** Run `/vd update` in-game (downloads addon files from GitHub, same as Anglin). Then `/addon reload vanadial`. Per-character settings under `config/addons/vanadial/` are not overwritten.
 

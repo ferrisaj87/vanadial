@@ -6,10 +6,15 @@
 local M = {};
 
 local https = require('socket.ssl.https');
+local http  = require('socket.http');
+http.TIMEOUT = 15;
 
 local RAW_BASE = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/main/';
 
 local UPDATE_VERSION_URL = RAW_BASE .. 'vanadial.lua';
+
+-- Seconds after load before the login update notice (avoid login chat spam).
+local LOGIN_CHECK_DELAY_SEC = 15;
 
 -- All runtime Lua files shipped with the addon (relative to addons/vanadial/).
 local UPDATE_RELATIVE = {
@@ -29,10 +34,8 @@ local UPDATE_RELATIVE = {
 };
 
 local _version            = '0.0.0';
-local _loginCheckAt       = nil;
-local _updateMessageDelay = nil;
-local _latestVersion      = nil;
-local _loginCheckDone     = false;
+local _loginCheckAt        = nil;
+local _loginCheckDone      = false;
 
 local UPDATE_FILES = {};
 
@@ -84,9 +87,7 @@ local function SanitizeChat(text)
 end
 
 local function PrintMsg(msg)
-    for line in SanitizeChat(msg):gmatch('[^\n]+') do
-        print("[Vana'Dial] " .. line);
-    end
+    print("[Vana'Dial] " .. SanitizeChat(msg));
 end
 
 local function ParseVersionFromBody(body)
@@ -123,40 +124,26 @@ function M.GetVersion()
 end
 
 function M.ScheduleLoginCheck(delaySec)
-    _loginCheckAt = os.clock() + (delaySec or 8);
+    _loginCheckAt   = os.clock() + (delaySec or LOGIN_CHECK_DELAY_SEC);
     _loginCheckDone = false;
 end
 
-local function CheckForUpdateQuiet()
-    local remote = FetchRemoteVersion();
-    if not remote or remote == '' or not _version or _version == '' then
-        return;
-    end
-
-    _latestVersion = remote;
-
-    if VersionGreater(remote, _version) then
-        _updateMessageDelay = os.clock() + 2;
-    end
-end
-
 function M.TickLoginCheck()
-    if _updateMessageDelay and os.clock() >= _updateMessageDelay then
-        PrintMsg(string.format(
-            'Update available! Current: v%s  Latest: v%s  --  Type /vd update to install.',
-            _version, _latestVersion or '?'));
-        _updateMessageDelay = nil;
-    end
-
     if _loginCheckDone or not _loginCheckAt or os.clock() < _loginCheckAt then
         return;
     end
     _loginCheckDone = true;
     _loginCheckAt = nil;
 
-    local ok, err = pcall(CheckForUpdateQuiet);
+    local ok = pcall(function()
+        local remote = FetchRemoteVersion();
+        if remote and remote ~= '' and _version and _version ~= ''
+            and VersionGreater(remote, _version) then
+            PrintMsg('There is an update available.');
+        end
+    end);
     if not ok then
-        print("[Vana'Dial] Update check failed.");
+        -- Silent on login; user can run /vd checkupdate manually.
     end
 end
 
@@ -165,21 +152,15 @@ function M.CheckAndNotify(manual)
 
     if not remote then
         if manual then
-            PrintMsg(string.format(
-                'Could not reach GitHub to check for updates. (HTTP %s)',
-                tostring(code)));
+            PrintMsg('Could not check for updates. Try again later.');
         end
         return;
     end
 
-    _latestVersion = remote;
-
     if VersionGreater(remote, _version) then
-        PrintMsg(string.format(
-            'Update available: %s (installed %s). Run /vd update, then /addon reload vanadial.',
-            remote, _version));
+        PrintMsg('There is an update available.');
     elseif manual then
-        PrintMsg(string.format('Already up to date. (v%s)', _version));
+        PrintMsg('Already up to date.');
     end
 end
 
@@ -187,55 +168,47 @@ function M.RunUpdate()
     local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
 
     if not ok or code ~= 200 or not body then
-        PrintMsg('Could not reach GitHub to check for updates.');
+        PrintMsg('Could not check for updates. Try again later.');
         return;
     end
 
     local remote = ParseVersionFromBody(body);
     if not remote then
-        PrintMsg('Could not determine remote version.');
+        PrintMsg('Could not check for updates. Try again later.');
         return;
     end
-
-    _latestVersion = remote;
 
     if not VersionGreater(remote, _version) then
-        PrintMsg(string.format('Already up to date. (v%s)', _version));
+        PrintMsg('Already up to date.');
         return;
     end
 
+    PrintMsg('Updating Vana''Dial....');
+
     local allOk = true;
-    local messages = { string.format('Downloading v%s...', remote) };
 
     for _, f in ipairs(UPDATE_FILES) do
         local fok, fbody, fcode = FetchUrl(f.url);
 
         if not fok or fcode ~= 200 or not fbody or fbody == '' then
-            table.insert(messages, string.format(
-                'Failed to download %s (HTTP %s). Update aborted.', f.label, tostring(fcode)));
             allOk = false;
             break;
         end
 
         local out = io.open(f.path, 'wb');
         if not out then
-            table.insert(messages, string.format(
-                'Cannot write %s. Check file permissions. Update aborted.', f.label));
             allOk = false;
             break;
         end
         out:write(fbody);
         out:close();
-        table.insert(messages, string.format('Updated %s.', f.label));
     end
 
     if allOk then
-        table.insert(messages, string.format(
-            'Update to v%s complete! Type: /addon reload vanadial', remote));
-        _updateMessageDelay = nil;
+        PrintMsg('Addon has been successfully updated, use /addon reload vanadial to reload newest version.');
+    else
+        PrintMsg('Update failed. Try again or download from GitHub.');
     end
-
-    PrintMsg(table.concat(messages, '\n'));
 end
 
 return M;

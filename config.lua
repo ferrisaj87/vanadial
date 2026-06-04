@@ -142,8 +142,8 @@ local VD_COMMANDS = {
     { '/vd rse',    'Open the timers popup with RSE expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd reset',  "Reset the main Vana'Dial window position to the default (100, 100)." },
-    { '/vd update', 'Download the latest version from GitHub. Reload with /addon reload vanadial after.' },
-    { '/vd checkupdate', 'Check GitHub for a newer version without downloading.' },
+    { '/vd update', 'Download the latest version from GitHub, then /addon reload vanadial.' },
+    { '/vd checkupdate', 'Check whether a newer version is available on GitHub.' },
 };
 
 -- ── Theme ───────────────────────────────────────────────────────────────────

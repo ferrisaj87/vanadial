@@ -326,7 +326,8 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
 
         -- Pulse the % text between normal element color and glow color on new/full moon.
         if isNewMoonPhase or isFullMoonPhase then
-            local pulse = (math.sin(os.clock() * 4.0) + 1.0) * 0.5;
+            -- Quantize pulse to limit unique colors per session (imtext caches by ARGB).
+            local pulse = math.floor((math.sin(os.clock() * 4.0) + 1.0) * 8 + 0.5) / 8;
             local glowColor = isNewMoonPhase
                 and (tonumber(colorConfig.moonNewColor)  or 0xFFFF4444)
                 or  (tonumber(colorConfig.moonFullColor) or 0xFF88CCFF);
@@ -534,6 +535,9 @@ function M.Reset()
 end
 
 function M.Cleanup()
+    -- Release D3D textures held by the shared TextureManager cache.
+    TextureManager.clear();
+    imtext.Reset();
     -- Clear shared texture tables in place so popups' context keeps referencing
     -- the same tables (a fresh {} would orphan popups._ctx and the old textures).
     for k in pairs(textures)          do textures[k]          = nil; end

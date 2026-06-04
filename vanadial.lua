@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.3';
+addon.version = '1.2.4';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -230,10 +230,11 @@ require('libs.imgui_compat');
 -- ── Load Vana'Dial modules ────────────────────────────────────────────────────
 -- Loaded AFTER gConfig and globals are set so they can read gConfig at
 -- module-load time (some constants reference gConfig at the file scope).
-local display = require('display');
-local popups  = require('popups');
-local config  = require('config');
-local imtext  = require('libs.imtext');
+local display         = require('display');
+local popups          = require('popups');
+local config          = require('config');
+local imtext          = require('libs.imtext');
+local TextureManager  = require('libs.texturemanager');
 
 -- ── Module state ──────────────────────────────────────────────────────────────
 local hidden             = false;
@@ -249,10 +250,11 @@ local WEATHER_PKT_OFF     = 9;   -- Lua 1-based index for packet byte 0x08
 local _weatherPtr         = nil;
 local _weatherMemResolved = false; -- true after one resolve attempt (success or fail)
 
+-- Horizon XI uses FFXiMain.dll only; avoid the fallback scan of all modules (very slow).
 local function memory_find_compat(pattern, offset, scan)
     local result = ashita.memory.find('FFXiMain.dll', 0, pattern, offset, scan);
     if result ~= nil and result ~= 0 then return result end;
-    return ashita.memory.find(0, 0, pattern, offset, scan);
+    return nil;
 end
 
 local function ResolveWeatherPtrOnce()
@@ -303,7 +305,9 @@ end
 -- while a "real" menu (inventory, map, etc.) is open. Combat/chat sub-menus are
 -- ignored so the clock doesn't vanish every time you open the action menu.
 -- Signature courtesy of Velyn (same one XIUI uses).
-local _pGameMenu = nil;
+local _pGameMenu       = nil;
+local _gameMenuFailed  = false;
+
 local function ResolveGameMenuPtr()
     local ok, result = pcall(function()
         return ashita.memory.find('FFXiMain.dll', 0, '8B480C85C974??8B510885D274??3B05', 16, 0);
@@ -312,9 +316,15 @@ local function ResolveGameMenuPtr()
     return nil;
 end
 
+local function EnsureGameMenuPtr()
+    if _pGameMenu or _gameMenuFailed then return _pGameMenu end;
+    _pGameMenu = ResolveGameMenuPtr();
+    if not _pGameMenu then _gameMenuFailed = true; end
+    return _pGameMenu;
+end
+
 local function GetMenuName()
-    if not _pGameMenu then _pGameMenu = ResolveGameMenuPtr(); end
-    if not _pGameMenu then return ''; end
+    if not EnsureGameMenuPtr() then return ''; end
     local ok, name = pcall(function()
         local subPointer = ashita.memory.read_uint32(_pGameMenu);
         if subPointer == 0 then return ''; end
@@ -350,7 +360,9 @@ end
 -- ── Chat log expanded (for "Hide When Chat Log Expanded") ─────────────────────
 -- Same FFXiMain.dll signature as minimapcontrol / minimapmon. Detects the large
 -- scrollback window only — not the inline chat input used while typing.
-local _pChatExpanded = nil;
+local _pChatExpanded      = nil;
+local _chatExpandedFailed = false;
+
 local function ResolveChatExpandedPtr()
     local ok, result = pcall(function()
         return ashita.memory.find('FFXiMain.dll', 0, '83EC??B9????????E8????????0FBF4C24??84C0', 0x04, 0);
@@ -359,9 +371,15 @@ local function ResolveChatExpandedPtr()
     return nil;
 end
 
+local function EnsureChatExpandedPtr()
+    if _pChatExpanded or _chatExpandedFailed then return _pChatExpanded end;
+    _pChatExpanded = ResolveChatExpandedPtr();
+    if not _pChatExpanded then _chatExpandedFailed = true; end
+    return _pChatExpanded;
+end
+
 local function IsChatExpanded()
-    if not _pChatExpanded then _pChatExpanded = ResolveChatExpandedPtr(); end
-    if not _pChatExpanded then return false; end
+    if not EnsureChatExpandedPtr() then return false; end
     local ok, expanded = pcall(function()
         local ptr = ashita.memory.read_uint32(_pChatExpanded);
         if ptr == 0 then return false; end
@@ -382,12 +400,15 @@ ashita.events.register('load', 'vd_load', function()
     display.Initialize();
     local w = ReadWeatherFromMemory();
     if w ~= nil then weatherId = w; end
-    updater.ScheduleLoginCheck(8);
+    updater.ScheduleLoginCheck(15);
 end);
 
 ashita.events.register('unload', 'vd_unload', function()
     ResetWeatherState();
+    _pGameMenu = nil;
+    _gameMenuFailed = false;
     _pChatExpanded = nil;
+    _chatExpandedFailed = false;
     display.Cleanup();
     -- Flush any pending window-position changes so a drag right before unload
     -- (or reload) is never lost.
@@ -395,6 +416,7 @@ ashita.events.register('unload', 'vd_unload', function()
 end);
 
 ashita.events.register('d3d_present', 'vd_present', function()
+    TextureManager.FlushPendingReleases();
     updater.TickLoginCheck();
 
     if not hidden then
@@ -431,6 +453,10 @@ end);
 ashita.events.register('packet_in', 'vd_packet', function(e)
     if e.id == 0x000A then
         ResetWeatherState();
+        _pGameMenu = nil;
+        _gameMenuFailed = false;
+        _pChatExpanded = nil;
+        _chatExpandedFailed = false;
         pendingWeatherRead = true;
         pendingWeatherTime = os.time() + 2;
         return;
