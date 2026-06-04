@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.4';
+addon.version = '1.2.5';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -131,38 +131,61 @@ local defaults = T{
 -- settings.load() persists to Game/config/addons/vanadial/<Char_ServerId>/settings.lua
 -- automatically (one folder per character, same scheme XIUI uses).
 gConfig = settings.load(defaults);
--- Settings copied from the old vanatime addon folder (optional manual migration).
-if gConfig.showVanaTime ~= nil and gConfig.showVanaDial == nil then
-    gConfig.showVanaDial = gConfig.showVanaTime;
-end
 -- appliedPositions is per-session only; reset it so saved positions are applied
 -- on each load (do not persist this through settings.save).
 gConfig.appliedPositions = {};
+
+local WINDOW_KEY = 'VanaDial';
+
+local function MigrateWindowSettings()
+    if gConfig.showVanaTime ~= nil and gConfig.showVanaDial == nil then
+        gConfig.showVanaDial = gConfig.showVanaTime;
+    end
+    if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
+    if gConfig.windowPositions['VanaTime'] and not gConfig.windowPositions[WINDOW_KEY] then
+        gConfig.windowPositions[WINDOW_KEY] = gConfig.windowPositions['VanaTime'];
+    end
+end
 
 -- Debounced settings persistence. SaveWindowPosition() runs every frame while a
 -- window is dragged, so we never write to disk inline — instead we flag the
 -- settings dirty and flush once movement has settled (see the d3d_present
 -- handler). This keeps drag positions across reloads without thrashing disk I/O.
-local _settingsDirty   = false;
-local _settingsDirtyAt = 0;
+local _settingsDirty      = false;
+local _settingsDirtyAt    = 0;
+local _allowPositionSave  = false;
+
 local function MarkSettingsDirty()
     _settingsDirty   = true;
     _settingsDirtyAt = os.clock();
 end
 
--- Seed a distinct default position the first time the standalone runs so it does
--- Default position is offset from typical XIUI widget placement so both can
--- coexist without stacking on first run.
-local WINDOW_KEY = 'VanaDial';
-if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
--- Migrate position saved under the old standalone name.
-if gConfig.windowPositions['VanaTime'] and not gConfig.windowPositions[WINDOW_KEY] then
-    gConfig.windowPositions[WINDOW_KEY] = gConfig.windowPositions['VanaTime'];
+local function EnsureDefaultWindowPosition(persist)
+    if not gConfig.windowPositions[WINDOW_KEY] then
+        gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
+        if persist then
+            MarkSettingsDirty();
+        end
+    end
 end
-if not gConfig.windowPositions[WINDOW_KEY] then
-    gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
-    settings.save();
+
+local function OnCharacterSettingsReady(s)
+    if s ~= nil then
+        gConfig = s;
+    end
+    MigrateWindowSettings();
+    gConfig.appliedPositions = {};
+    EnsureDefaultWindowPosition(true);
 end
+
+-- Reload per-character settings once the character folder is known (Anglin pattern).
+settings.register('settings', 'vd_char_settings', function(s)
+    settings.unregister('settings', 'vd_char_settings');
+    OnCharacterSettingsReady(s);
+end);
+
+MigrateWindowSettings();
+EnsureDefaultWindowPosition(false);
 
 -- ── Config window state ───────────────────────────────────────────────────────
 local _configOpen = false;
@@ -208,8 +231,10 @@ function ApplyWindowPosition(windowName)
 end
 
 function SaveWindowPosition(windowName)
-    if not gConfig then return; end
+    if not gConfig or not _allowPositionSave then return; end
     local x, y = imgui.GetWindowPos();
+    -- Ignore garbage positions during zoning / loading screens.
+    if x < 1 and y < 1 then return; end
     if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
     local saved = gConfig.windowPositions[windowName];
     if not saved then
@@ -239,6 +264,53 @@ local TextureManager  = require('libs.texturemanager');
 -- ── Module state ──────────────────────────────────────────────────────────────
 local hidden             = false;
 local weatherId          = 0;
+
+-- ── In-world gate (zonename / minimap pattern) ────────────────────────────────
+-- Do not draw on the title screen, character select, or while zoning.
+
+local function IsPlayerZoning(player)
+    if not player then return true; end
+    if player.isZoning == true then return true; end
+    local ok, zoning = pcall(function() return player:GetIsZoning(); end);
+    return ok and zoning == true;
+end
+
+local function IsPlayerInWorld()
+    local ok, ready = pcall(function()
+        local party = AshitaCore:GetMemoryManager():GetParty();
+        if not party then return false; end
+
+        local zoneId = party:GetMemberZone(0);
+        if zoneId == nil or zoneId == 0 then return false; end
+
+        local player = AshitaCore:GetMemoryManager():GetPlayer();
+        if not player or IsPlayerZoning(player) then return false; end
+
+        local entIndex = party:GetMemberTargetIndex(0);
+        if entIndex == nil or entIndex == 0 then return false; end
+
+        local entity = AshitaCore:GetMemoryManager():GetEntity();
+        if not entity then return false; end
+
+        local name = entity:GetName(entIndex);
+        if not name or name == '' then return false; end
+
+        return true;
+    end);
+    return ok and ready;
+end
+
+local function ShouldDrawMain()
+    if hidden then return false; end
+    if gConfig.showVanaDial == false then return false; end
+    return IsPlayerInWorld();
+end
+
+local function BeginZoning()
+    _allowPositionSave = false;
+    if not gConfig.appliedPositions then gConfig.appliedPositions = T{}; end
+    gConfig.appliedPositions[WINDOW_KEY] = nil;
+end
 local pendingWeatherRead = false;
 local pendingWeatherTime = 0;
 
@@ -419,7 +491,11 @@ ashita.events.register('d3d_present', 'vd_present', function()
     TextureManager.FlushPendingReleases();
     updater.TickLoginCheck();
 
-    if not hidden then
+    if IsPlayerInWorld() then
+        _allowPositionSave = true;
+    end
+
+    if ShouldDrawMain() then
         -- Hide the clock + popups while a game menu or expanded chat log is open.
         -- The config window (below) is intentionally NOT gated so it stays usable.
         local menuHidden = gConfig.vanaTimeHideOnMenuFocus and IsGameMenuOpen();
@@ -450,8 +526,13 @@ ashita.events.register('d3d_present', 'vd_present', function()
     end
 end);
 
+ashita.events.register('zone_change', 'vd_zone_change', function()
+    BeginZoning();
+end);
+
 ashita.events.register('packet_in', 'vd_packet', function(e)
     if e.id == 0x000A then
+        BeginZoning();
         ResetWeatherState();
         _pGameMenu = nil;
         _gameMenuFailed = false;
