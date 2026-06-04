@@ -142,6 +142,8 @@ local VD_COMMANDS = {
     { '/vd rse',    'Open the timers popup with RSE expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd reset',  "Reset the main Vana'Dial window position to the default (100, 100)." },
+    { '/vd update', 'Pull the latest version from GitHub (requires a git clone). Reload with /addon reload vanadial after.' },
+    { '/vd checkupdate', 'Check GitHub for a newer release without downloading.' },
 };
 
 -- ── Theme ───────────────────────────────────────────────────────────────────
@@ -252,6 +254,10 @@ function M.Draw(openFlag, setOpen)
             CB('Enabled', 'showVanaDial');
             CB('Hide When Menu Open', 'vanaTimeHideOnMenuFocus');
             Tip('Hide this module when a game menu is open (equipment, map, etc.).');
+            imgui.Indent(16);
+            CB('Hide When Chat Log Expanded', 'vanaTimeHideOnChatExpanded');
+            Tip("Hide when the chat scrollback window is expanded. Does not hide while typing in chat.");
+            imgui.Unindent(16);
             CB('Display Settings Button', 'vanaTimeShowSettingsBtn');
             Tip("Show a gear icon on the Vana'Dial module that opens these settings directly.");
 

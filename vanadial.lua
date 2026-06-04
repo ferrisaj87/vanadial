@@ -12,11 +12,13 @@
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
 *   /vd reset             - Reset window position to default
+*   /vd update            - Pull latest from GitHub (git clone installs)
+*   /vd checkupdate       - Check GitHub for a newer release
 ]]--
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.0.0';
+addon.version = '1.1.0';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -29,6 +31,8 @@ local bit      = require('bit');
 -- XIUI's handlers/helpers.lua exposes these as bare globals; we mirror that here
 -- from our bundled color lib so windowbackground.lua, imtext.lua, etc. work.
 local colorLib          = require('libs.color');
+local updater           = require('libs.updater');
+updater.Init(addon.version);
 ARGBToRGBA              = colorLib.ARGBToRGBA;
 RGBAToARGB              = colorLib.RGBAToARGB;
 ARGBToImGui             = colorLib.ARGBToImGui;
@@ -49,6 +53,7 @@ GetGradientTextColor    = colorLib.GetGradientTextColor;
 local defaults = T{
     showVanaDial                 = true,
     vanaTimeHideOnMenuFocus      = false,
+    vanaTimeHideOnChatExpanded   = false,
     vanaTimeVTElementColor       = false,
     vanaTimeShowLocalTime        = true,
     vanaTimeShowMoonPercent      = true,
@@ -327,6 +332,31 @@ local function IsGameMenuOpen()
     return not IGNORED_MENUS[shortName];
 end
 
+-- ── Chat log expanded (for "Hide When Chat Log Expanded") ─────────────────────
+-- Same FFXiMain.dll signature as minimapcontrol / minimapmon. Detects the large
+-- scrollback window only — not the inline chat input used while typing.
+local _pChatExpanded = nil;
+local function ResolveChatExpandedPtr()
+    local ok, result = pcall(function()
+        return ashita.memory.find('FFXiMain.dll', 0, '83EC??B9????????E8????????0FBF4C24??84C0', 0x04, 0);
+    end);
+    if ok and type(result) == 'number' and result ~= 0 then return result end;
+    return nil;
+end
+
+local function IsChatExpanded()
+    if not _pChatExpanded then _pChatExpanded = ResolveChatExpandedPtr(); end
+    if not _pChatExpanded then return false; end
+    local ok, expanded = pcall(function()
+        local ptr = ashita.memory.read_uint32(_pChatExpanded);
+        if ptr == 0 then return false; end
+        return ashita.memory.read_uint8(ptr + 0xF1) ~= 0;
+    end);
+    if ok then return expanded; end
+    _pChatExpanded = nil;
+    return false;
+end
+
 -- ── Events ────────────────────────────────────────────────────────────────────
 
 ashita.events.register('load', 'vd_load', function()
@@ -338,12 +368,14 @@ ashita.events.register('load', 'vd_load', function()
     display.Initialize();
     local w = GetWeatherSafe();
     if w ~= nil then weatherId = w; end
+    updater.ScheduleLoginCheck(8);
 end);
 
 ashita.events.register('unload', 'vd_unload', function()
     weatherId = 0;
     pendingWeatherRead = false;
     _weatherPtr = nil;
+    _pChatExpanded = nil;
     display.Cleanup();
     -- Flush any pending window-position changes so a drag right before unload
     -- (or reload) is never lost.
@@ -351,12 +383,15 @@ ashita.events.register('unload', 'vd_unload', function()
 end);
 
 ashita.events.register('d3d_present', 'vd_present', function()
-    if not hidden then
-        -- Hide the clock + popups while a game menu is open, if enabled. The
-        -- config window (below) is intentionally NOT gated so it stays usable.
-        local menuHidden = gConfig.vanaTimeHideOnMenuFocus and IsGameMenuOpen();
+    updater.TickLoginCheck();
 
-        if not menuHidden then
+    if not hidden then
+        -- Hide the clock + popups while a game menu or expanded chat log is open.
+        -- The config window (below) is intentionally NOT gated so it stays usable.
+        local menuHidden = gConfig.vanaTimeHideOnMenuFocus and IsGameMenuOpen();
+        local chatHidden = gConfig.vanaTimeHideOnChatExpanded and IsChatExpanded();
+
+        if not menuHidden and not chatHidden then
             -- Deferred weather re-read after zone-in.
             if pendingWeatherRead and os.time() >= pendingWeatherTime then
                 pendingWeatherRead = false;
@@ -441,6 +476,12 @@ ashita.events.register('command', 'vd_command', function(e)
         settings.save();
         print("[Vana'Dial] Position reset to (100, 100).");
 
+    elseif sub == 'update' then
+        updater.RunUpdate();
+
+    elseif sub == 'checkupdate' or sub == 'check' then
+        updater.CheckAndNotify(true);
+
     else
         print("[Vana'Dial] Commands:");
         print('  /vd               - Toggle visibility');
@@ -450,6 +491,8 @@ ashita.events.register('command', 'vd_command', function(e)
         print('  /vd rse           - Toggle RSE timers (vtrse ok)');
         print('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
         print('  /vd reset         - Reset window position');
+        print('  /vd update        - Pull latest (git clone)');
+        print('  /vd checkupdate   - Check GitHub for updates');
         print('  /vanadial         - Alias for /vd');
     end
 end);
