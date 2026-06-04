@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.1';
+addon.version = '1.2.2';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -494,5 +494,6 @@ ashita.events.register('command', 'vd_command', function(e)
         print('  /vd update        - Download latest from GitHub');
         print('  /vd checkupdate   - Check GitHub for updates');
         print('  /vanadial         - Alias for /vd');
+        print('  [v1.2.2 updater test - you should only see this after /vd update]');
     end
 end);
