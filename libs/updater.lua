@@ -1,57 +1,80 @@
 --[[
-* Vana'Dial - GitHub release check and git pull updater.
-* Uses PowerShell for GitHub API (Windows / Horizon XI). Update requires a git clone.
+* Vana'Dial — GitHub raw download updater (same pattern as Anglin).
+* Fetches addon.version from main, downloads listed files over HTTPS, overwrites in place.
 ]]--
 
 local M = {};
 
-local REPO_SLUG  = 'ferrisaj87/vanadial';
-local API_URL    = 'https://api.github.com/repos/' .. REPO_SLUG .. '/releases/latest';
-local REPO_URL   = 'https://github.com/' .. REPO_SLUG;
+local https = require('socket.ssl.https');
 
-local _version       = '0.0.0';
-local _loginCheckAt  = nil;
-local _checkInFlight = false;
+local RAW_BASE = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/main/';
+
+local UPDATE_VERSION_URL = RAW_BASE .. 'vanadial.lua';
+
+-- All runtime Lua files shipped with the addon (relative to addons/vanadial/).
+local UPDATE_RELATIVE = {
+    'vanadial.lua',
+    'display.lua',
+    'popups.lua',
+    'config.lua',
+    'timers.lua',
+    'data.lua',
+    'libs/color.lua',
+    'libs/imgui_compat.lua',
+    'libs/texturemanager.lua',
+    'libs/imtext.lua',
+    'libs/windowbackground.lua',
+    'libs/memory.lua',
+    'libs/updater.lua',
+};
+
+local _version             = '0.0.0';
+local _loginCheckAt        = nil;
+local _updateMessageDelay  = nil;
+local _latestVersion       = nil;
+
+local UPDATE_FILES = {};
+
+local function BuildUpdateFiles()
+    local root = AshitaCore:GetInstallPath() or '';
+    local addonRoot = (root .. 'addons\\vanadial\\'):gsub('[\\/]+$', '') .. '\\';
+    UPDATE_FILES = {};
+    for _, rel in ipairs(UPDATE_RELATIVE) do
+        local urlPath = rel:gsub('\\', '/');
+        UPDATE_FILES[#UPDATE_FILES + 1] = {
+            url   = RAW_BASE .. urlPath,
+            path  = addonRoot .. rel:gsub('/', '\\'),
+            label = rel:gsub('\\', '/'),
+        };
+    end
+end
+
+BuildUpdateFiles();
 
 -- ── Version helpers ─────────────────────────────────────────────────────────────
 
 local function ParseVersion(ver)
-    ver = tostring(ver or ''):gsub('^%s*v', ''):gsub('%s+$', '');
-    local parts = T{};
-    for n in ver:gmatch('%d+') do
+    local parts = {};
+    for n in tostring(ver or ''):gsub('^%s*v', ''):gmatch('%d+') do
         parts[#parts + 1] = tonumber(n) or 0;
     end
     return parts;
 end
 
-local function CompareVersions(a, b)
+local function VersionGreater(a, b)
     local pa = ParseVersion(a);
     local pb = ParseVersion(b);
-    local n  = math.max(#pa, #pb);
-    for i = 1, n do
-        local va = pa[i] or 0;
-        local vb = pb[i] or 0;
-        if va < vb then return -1; end
-        if va > vb then return 1; end
+    for i = 1, math.max(#pa, #pb) do
+        local ai = pa[i] or 0;
+        local bi = pb[i] or 0;
+        if ai > bi then return true; end
+        if ai < bi then return false; end
     end
-    return 0;
+    return false;
 end
 
 function M.IsNewer(remote, localVer)
-    return CompareVersions(remote, localVer) > 0;
-end
-
--- ── Paths / shell ─────────────────────────────────────────────────────────────
-
-local function GetAddonDir()
-    local root = AshitaCore:GetInstallPath() or '';
-    return (root .. 'addons\\vanadial'):gsub('[\\/]+$', '');
-end
-
--- Trailing backslash before a closing " breaks cmd/git on Windows (\" escapes the quote).
-local function QuoteCmdPath(path)
-    path = path:gsub('[\\/]+$', ''):gsub('"', '');
-    return '"' .. path .. '"';
+    return VersionGreater(remote, localVer);
 end
 
 -- FFXI chat is not UTF-8; strip non-ASCII so glyphs do not become garbage.
@@ -59,40 +82,33 @@ local function SanitizeChat(text)
     return tostring(text or ''):gsub('[^\32-\126]', '');
 end
 
-local function ShellCapture(cmd)
-    local f = io.popen(cmd, 'r');
-    if not f then return nil; end
-    local out = f:read('*a') or '';
-    f:close();
-    return out;
-end
-
-local function HasGitInstall()
-    local dir = GetAddonDir();
-    local head = io.open(dir .. '\\.git\\HEAD', 'r');
-    if head then
-        head:close();
-        return true;
-    end
-    return false;
-end
-
--- ── GitHub API ────────────────────────────────────────────────────────────────
-
-local function FetchLatestReleaseTag()
-    local ps = string.format(
-        [[powershell -NoProfile -Command "(Invoke-RestMethod -Uri '%s' -Headers @{ 'User-Agent' = 'VanaDial-Ashita' }).tag_name"]],
-        API_URL:gsub("'", "''")
-    );
-    local out = ShellCapture(ps);
-    if not out then return nil; end
-    out = out:gsub('[\r\n]+', ''):gsub('^%s+', ''):gsub('%s+$', '');
-    if out == '' then return nil; end
-    return out;
-end
-
 local function PrintMsg(msg)
-    print("[Vana'Dial] " .. SanitizeChat(msg));
+    for line in SanitizeChat(msg):gmatch('[^\n]+') do
+        print("[Vana'Dial] " .. line);
+    end
+end
+
+local function ParseVersionFromBody(body)
+    if not body then return nil; end
+    local remote = body:match("addon%.version%s*=%s*'([^']+)'");
+    if not remote then
+        remote = body:match('addon%.version%s*=%s*"([^"]+)"');
+    end
+    return remote;
+end
+
+local function FetchUrl(url)
+    return pcall(function()
+        return https.request(url .. '?t=' .. os.time());
+    end);
+end
+
+local function FetchRemoteVersion()
+    local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
+    if not ok or code ~= 200 or not body then
+        return nil, code;
+    end
+    return ParseVersionFromBody(body), 200;
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
@@ -109,68 +125,110 @@ function M.ScheduleLoginCheck(delaySec)
     _loginCheckAt = os.clock() + (delaySec or 8);
 end
 
+local function CheckForUpdateQuiet()
+    local remote = FetchRemoteVersion();
+    if not remote or remote == '' or not _version or _version == '' then
+        return;
+    end
+
+    _latestVersion = remote;
+
+    if VersionGreater(remote, _version) then
+        _updateMessageDelay = os.clock() + 2;
+    end
+end
+
 function M.TickLoginCheck()
+    if _updateMessageDelay and os.clock() >= _updateMessageDelay then
+        PrintMsg(string.format(
+            'Update available! Current: v%s  Latest: v%s  --  Type /vd update to install.',
+            _version, _latestVersion or '?'));
+        _updateMessageDelay = nil;
+    end
+
     if not _loginCheckAt or os.clock() < _loginCheckAt then
         return;
     end
     _loginCheckAt = nil;
-    M.CheckAndNotify(false);
+    CheckForUpdateQuiet();
 end
 
 function M.CheckAndNotify(manual)
-    if _checkInFlight then return; end
-    _checkInFlight = true;
+    local remote, code = FetchRemoteVersion();
 
-    local latest = FetchLatestReleaseTag();
-    _checkInFlight = false;
-
-    if not latest then
+    if not remote then
         if manual then
-            PrintMsg('Could not reach GitHub to check for updates. Try again later.');
+            PrintMsg(string.format(
+                'Could not reach GitHub to check for updates. (HTTP %s)',
+                tostring(code)));
         end
         return;
     end
 
-    if M.IsNewer(latest, _version) then
+    _latestVersion = remote;
+
+    if VersionGreater(remote, _version) then
         PrintMsg(string.format(
             'Update available: %s (installed %s). Run /vd update, then /addon reload vanadial.',
-            latest, _version));
+            remote, _version));
     elseif manual then
-        PrintMsg(string.format('Up to date (%s). Latest release: %s.', _version, latest));
+        PrintMsg(string.format('Already up to date. (v%s)', _version));
     end
 end
 
 function M.RunUpdate()
-    if not HasGitInstall() then
-        PrintMsg('This folder is not a git clone. Install or update from:');
-        PrintMsg(REPO_URL);
+    local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
+
+    if not ok or code ~= 200 or not body then
+        PrintMsg('Could not reach GitHub to check for updates.');
         return;
     end
 
-    PrintMsg('Checking for updates...');
-    M.CheckAndNotify(true);
-
-    local dir = GetAddonDir();
-    local cmd = 'git -C ' .. QuoteCmdPath(dir) .. ' pull --ff-only 2>&1';
-    local out = ShellCapture(cmd);
-    if not out then
-        PrintMsg('git pull failed (is git installed and on PATH?).');
+    local remote = ParseVersionFromBody(body);
+    if not remote then
+        PrintMsg('Could not determine remote version.');
         return;
     end
 
-    out = out:gsub('[\r\n]+', '\n'):gsub('\n+$', '');
-    for line in out:gmatch('[^\n]+') do
-        PrintMsg(line);
+    _latestVersion = remote;
+
+    if not VersionGreater(remote, _version) then
+        PrintMsg(string.format('Already up to date. (v%s)', _version));
+        return;
     end
 
-    if out:find('Already up to date', 1, true)
-        or out:find('Already up%-to%-date', 1, true) then
-        -- message already printed
-    elseif out:find('Updating', 1, true) or out:find('Fast%-forward', 1, true) then
-        PrintMsg('Update complete. Run /addon reload vanadial to apply.');
-    else
-        PrintMsg('If files changed, run /addon reload vanadial to apply.');
+    local allOk = true;
+    local messages = { string.format('Downloading v%s...', remote) };
+
+    for _, f in ipairs(UPDATE_FILES) do
+        local fok, fbody, fcode = FetchUrl(f.url);
+
+        if not fok or fcode ~= 200 or not fbody or fbody == '' then
+            table.insert(messages, string.format(
+                'Failed to download %s (HTTP %s). Update aborted.', f.label, tostring(fcode)));
+            allOk = false;
+            break;
+        end
+
+        local out = io.open(f.path, 'wb');
+        if not out then
+            table.insert(messages, string.format(
+                'Cannot write %s. Check file permissions. Update aborted.', f.label));
+            allOk = false;
+            break;
+        end
+        out:write(fbody);
+        out:close();
+        table.insert(messages, string.format('Updated %s.', f.label));
     end
+
+    if allOk then
+        table.insert(messages, string.format(
+            'Update to v%s complete! Type: /addon reload vanadial', remote));
+        _updateMessageDelay = nil;
+    end
+
+    PrintMsg(table.concat(messages, '\n'));
 end
 
 return M;

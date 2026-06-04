@@ -12,13 +12,13 @@
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
 *   /vd reset             - Reset window position to default
-*   /vd update            - Pull latest from GitHub (git clone installs)
-*   /vd checkupdate       - Check GitHub for a newer release
+*   /vd update            - Download latest from GitHub (then /addon reload vanadial)
+*   /vd checkupdate       - Check GitHub for a newer version
 ]]--
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.0';
+addon.version = '1.2.1';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -491,7 +491,7 @@ ashita.events.register('command', 'vd_command', function(e)
         print('  /vd rse           - Toggle RSE timers (vtrse ok)');
         print('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
         print('  /vd reset         - Reset window position');
-        print('  /vd update        - Pull latest (git clone)');
+        print('  /vd update        - Download latest from GitHub');
         print('  /vd checkupdate   - Check GitHub for updates');
         print('  /vanadial         - Alias for /vd');
     end

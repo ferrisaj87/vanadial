@@ -31,13 +31,13 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd rse` | Toggle RSE timers |
 | `/vd lunar` | Toggle lunar phase timers |
 | `/vd reset` | Reset window position |
-| `/vd update` | Pull latest from GitHub (git clone installs; then `/addon reload vanadial`) |
-| `/vd checkupdate` | Check GitHub for a newer release |
+| `/vd update` | Download latest from GitHub (`main` branch); then `/addon reload vanadial` |
+| `/vd checkupdate` | Check GitHub for a newer version |
 | `/vanadial` | Alias for `/vd` |
 
 On login, Vana'Dial checks GitHub once and prints a chat message if a newer release is available.
 
-**Updating:** Clone the repo into `Game/addons/vanadial/` so `/vd update` can run `git pull`. Zip-only installs should update manually from [releases](https://github.com/ferrisaj87/vanadial/releases).
+**Updating:** Run `/vd update` in-game (downloads addon files from GitHub, same as Anglin). Then `/addon reload vanadial`. Per-character settings under `config/addons/vanadial/` are not overwritten.
 
 Timer subcommands also accept `vtships`, `vtboats`, `vtrse`, and `vtlunar` (same as `ships`, `boats`, `rse`, `lunar`) if you are used to XIUI’s `/xiui vtships` naming.
 
