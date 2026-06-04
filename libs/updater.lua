@@ -28,10 +28,11 @@ local UPDATE_RELATIVE = {
     'libs/updater.lua',
 };
 
-local _version             = '0.0.0';
-local _loginCheckAt        = nil;
-local _updateMessageDelay  = nil;
-local _latestVersion       = nil;
+local _version            = '0.0.0';
+local _loginCheckAt       = nil;
+local _updateMessageDelay = nil;
+local _latestVersion      = nil;
+local _loginCheckDone     = false;
 
 local UPDATE_FILES = {};
 
@@ -123,6 +124,7 @@ end
 
 function M.ScheduleLoginCheck(delaySec)
     _loginCheckAt = os.clock() + (delaySec or 8);
+    _loginCheckDone = false;
 end
 
 local function CheckForUpdateQuiet()
@@ -146,11 +148,16 @@ function M.TickLoginCheck()
         _updateMessageDelay = nil;
     end
 
-    if not _loginCheckAt or os.clock() < _loginCheckAt then
+    if _loginCheckDone or not _loginCheckAt or os.clock() < _loginCheckAt then
         return;
     end
+    _loginCheckDone = true;
     _loginCheckAt = nil;
-    CheckForUpdateQuiet();
+
+    local ok, err = pcall(CheckForUpdateQuiet);
+    if not ok then
+        print("[Vana'Dial] Update check failed.");
+    end
 end
 
 function M.CheckAndNotify(manual)

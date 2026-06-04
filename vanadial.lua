@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.2';
+addon.version = '1.2.3';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -241,9 +241,13 @@ local weatherId          = 0;
 local pendingWeatherRead = false;
 local pendingWeatherTime = 0;
 
--- ── Weather memory reader ─────────────────────────────────────────────────────
-local WEATHER_SIG  = '66A1????????663D????72';
-local _weatherPtr  = nil;
+-- ── Weather (packet 0x057 primary; memory fallback on zone-in only) ───────────
+-- Incoming 0x057 carries weather ID at byte offset 0x08. Reading memory on every
+-- 0x057 was re-scanning FFXiMain.dll when the pointer was wrong, causing ~1s hitches.
+local WEATHER_SIG         = '66A1????????663D????72';
+local WEATHER_PKT_OFF     = 9;   -- Lua 1-based index for packet byte 0x08
+local _weatherPtr         = nil;
+local _weatherMemResolved = false; -- true after one resolve attempt (success or fail)
 
 local function memory_find_compat(pattern, offset, scan)
     local result = ashita.memory.find('FFXiMain.dll', 0, pattern, offset, scan);
@@ -251,7 +255,10 @@ local function memory_find_compat(pattern, offset, scan)
     return ashita.memory.find(0, 0, pattern, offset, scan);
 end
 
-local function ResolveWeatherPtr()
+local function ResolveWeatherPtrOnce()
+    if _weatherMemResolved then return _weatherPtr end;
+    _weatherMemResolved = true;
+
     local ok, result = pcall(function()
         local base = memory_find_compat(WEATHER_SIG, 0, 0);
         if not base or base == 0 then return nil end;
@@ -259,26 +266,35 @@ local function ResolveWeatherPtr()
         if not ptr or ptr == 0 then return nil end;
         return ptr;
     end);
-    if ok and type(result) == 'number' and result ~= 0 then return result end;
+    if ok and type(result) == 'number' and result ~= 0 then
+        _weatherPtr = result;
+    end
+    return _weatherPtr;
+end
+
+local function ReadWeatherFromMemory()
+    local ptr = ResolveWeatherPtrOnce();
+    if not ptr then return nil end;
+    local ok, w = pcall(function() return ashita.memory.read_uint8(ptr); end);
+    if ok and type(w) == 'number' and w >= 0 and w <= 19 then
+        return w;
+    end
     return nil;
 end
 
-local function GetWeatherSafe()
-    local ok, result = pcall(function()
-        if not _weatherPtr then
-            _weatherPtr = ResolveWeatherPtr();
-        end
-        if not _weatherPtr then return nil end;
-        local w = ashita.memory.read_uint8(_weatherPtr);
-        if type(w) ~= 'number' or w > 19 then
-            _weatherPtr = nil;
-            return nil;
-        end
-        return w;
-    end);
-    if ok and type(result) == 'number' then return result end;
-    _weatherPtr = nil;
+local function ReadWeatherFromPacket(data)
+    if type(data) ~= 'string' or #data < WEATHER_PKT_OFF then return nil end;
+    local w = data:byte(WEATHER_PKT_OFF);
+    if w and w >= 0 and w <= 19 then return w; end;
     return nil;
+end
+
+local function ResetWeatherState()
+    weatherId             = 0;
+    pendingWeatherRead    = false;
+    pendingWeatherTime    = 0;
+    _weatherPtr           = nil;
+    _weatherMemResolved   = false;
 end
 
 -- ── Game menu detection (for "Hide When Menu Open") ───────────────────────────
@@ -310,7 +326,6 @@ local function GetMenuName()
         return string.gsub(menuName, '\x00', '');
     end);
     if ok and type(name) == 'string' then return name; end
-    _pGameMenu = nil;  -- bad read; re-scan next time
     return '';
 end
 
@@ -353,7 +368,6 @@ local function IsChatExpanded()
         return ashita.memory.read_uint8(ptr + 0xF1) ~= 0;
     end);
     if ok then return expanded; end
-    _pChatExpanded = nil;
     return false;
 end
 
@@ -366,15 +380,13 @@ ashita.events.register('load', 'vd_load', function()
     -- Tahoma, so prewarm just that family (regular + bold).
     imtext.PrewarmFonts({'Tahoma'});
     display.Initialize();
-    local w = GetWeatherSafe();
+    local w = ReadWeatherFromMemory();
     if w ~= nil then weatherId = w; end
     updater.ScheduleLoginCheck(8);
 end);
 
 ashita.events.register('unload', 'vd_unload', function()
-    weatherId = 0;
-    pendingWeatherRead = false;
-    _weatherPtr = nil;
+    ResetWeatherState();
     _pChatExpanded = nil;
     display.Cleanup();
     -- Flush any pending window-position changes so a drag right before unload
@@ -395,7 +407,7 @@ ashita.events.register('d3d_present', 'vd_present', function()
             -- Deferred weather re-read after zone-in.
             if pendingWeatherRead and os.time() >= pendingWeatherTime then
                 pendingWeatherRead = false;
-                local w = GetWeatherSafe();
+                local w = ReadWeatherFromMemory();
                 if w ~= nil then weatherId = w; end
             end
 
@@ -418,16 +430,16 @@ end);
 
 ashita.events.register('packet_in', 'vd_packet', function(e)
     if e.id == 0x000A then
-        weatherId          = 0;
+        ResetWeatherState();
         pendingWeatherRead = true;
         pendingWeatherTime = os.time() + 2;
         return;
     end
     if e.id == 0x057 then
-        local w = GetWeatherSafe();
-        if w ~= nil and w > 0 then weatherId = w; end
-        pendingWeatherRead = true;
-        pendingWeatherTime = os.time() + 1;
+        local w = ReadWeatherFromPacket(e.data);
+        if w ~= nil then
+            weatherId = w;
+        end
     end
 end);
 
@@ -494,6 +506,5 @@ ashita.events.register('command', 'vd_command', function(e)
         print('  /vd update        - Download latest from GitHub');
         print('  /vd checkupdate   - Check GitHub for updates');
         print('  /vanadial         - Alias for /vd');
-        print('  [v1.2.2 updater test - you should only see this after /vd update]');
     end
 end);
