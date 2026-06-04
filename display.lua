@@ -777,6 +777,10 @@ function M.DrawWindow(weatherId)
             local tx = vtX + vtMeasW + 3;
             local ty = clockY + math.floor((clockH - clockH) / 2);
             DLImage(drawList, todIconTex, tx,ty, tx+clockH,ty+clockH, ToU32(0xEEFFFFFF));
+            if cfg.vanaTimeEnableTooltips ~= false and cfg.vanaTimeTipTod ~= false
+                and imgui.IsMouseHoveringRect({tx, ty}, {tx + clockH, ty + clockH}) then
+                imgui.SetTooltip('Time of Day: ' .. (data.GetTodName(vtHour) or ''));
+            end
         end
 
         local function DrawClockTooltips(vtX, ltX, ltClockY)

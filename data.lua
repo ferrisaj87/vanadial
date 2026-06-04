@@ -100,6 +100,16 @@ M.ELEM_KEYS = {
     [4]='elementIce',  [5]='elementLightning', [6]='elementLight', [7]='elementDark',
 };
 
+function M.GetTodName(vtHour)
+    if vtHour >= 20 or vtHour < 4 then
+        return 'Dead of Night';
+    end
+    if vtHour >= 6 and vtHour < 18 then
+        return 'Day';
+    end
+    return 'Night';
+end
+
 -- Which element each weekday DEFEATS (weakness badge)
 -- Chain: Water > Fire > Ice > Wind > Earth > Thunder > Water; Light <-> Dark
 M.ELEMENT_DEFEATS = {
