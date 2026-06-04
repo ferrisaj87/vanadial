@@ -1,5 +1,5 @@
 --[[
-* Vana'Dial — GitHub release check and git pull updater.
+* Vana'Dial - GitHub release check and git pull updater.
 * Uses PowerShell for GitHub API (Windows / Horizon XI). Update requires a git clone.
 ]]--
 
@@ -45,11 +45,18 @@ end
 
 local function GetAddonDir()
     local root = AshitaCore:GetInstallPath() or '';
-    return root .. 'addons\\vanadial\\';
+    return (root .. 'addons\\vanadial'):gsub('[\\/]+$', '');
 end
 
+-- Trailing backslash before a closing " breaks cmd/git on Windows (\" escapes the quote).
 local function QuoteCmdPath(path)
-    return '"' .. path:gsub('"', '\\"') .. '"';
+    path = path:gsub('[\\/]+$', ''):gsub('"', '');
+    return '"' .. path .. '"';
+end
+
+-- FFXI chat is not UTF-8; strip non-ASCII so glyphs do not become garbage.
+local function SanitizeChat(text)
+    return tostring(text or ''):gsub('[^\32-\126]', '');
 end
 
 local function ShellCapture(cmd)
@@ -62,7 +69,7 @@ end
 
 local function HasGitInstall()
     local dir = GetAddonDir();
-    local head = io.open(dir .. '.git\\HEAD', 'r');
+    local head = io.open(dir .. '\\.git\\HEAD', 'r');
     if head then
         head:close();
         return true;
@@ -85,7 +92,7 @@ local function FetchLatestReleaseTag()
 end
 
 local function PrintMsg(msg)
-    print("[Vana'Dial] " .. msg);
+    print("[Vana'Dial] " .. SanitizeChat(msg));
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
@@ -140,7 +147,7 @@ function M.RunUpdate()
         return;
     end
 
-    PrintMsg('Checking for updates…');
+    PrintMsg('Checking for updates...');
     M.CheckAndNotify(true);
 
     local dir = GetAddonDir();
