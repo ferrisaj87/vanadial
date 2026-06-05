@@ -28,7 +28,7 @@ local function CB(label, key)
     local v = T{ gConfig[key] == true };
     if imgui.Checkbox(label, v) then
         gConfig[key] = v[1];
-        settings.save();
+        SaveVanaDialSettings();
         return true;
     end
     return false;
@@ -39,11 +39,11 @@ local function SF(label, key, vmin, vmax, fmt, reset)
     local v = T{ tonumber(gConfig[key]) or reset };
     if imgui.SliderFloat(label, v, vmin, vmax, fmt or '%.2f') then
         gConfig[key] = v[1];
-        settings.save();
+        SaveVanaDialSettings();
     end
     if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
         gConfig[key] = reset;
-        settings.save();
+        SaveVanaDialSettings();
     end
 end
 
@@ -52,11 +52,11 @@ local function SI(label, key, vmin, vmax, reset)
     local v = T{ math.floor(tonumber(gConfig[key]) or reset) };
     if imgui.SliderInt(label, v, vmin, vmax) then
         gConfig[key] = v[1];
-        settings.save();
+        SaveVanaDialSettings();
     end
     if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
         gConfig[key] = reset;
-        settings.save();
+        SaveVanaDialSettings();
     end
 end
 
@@ -84,7 +84,7 @@ local function Combo(label, key, labels, values, default, width)
             local isSelected = (itemValue == current);
             if imgui.Selectable(itemLabel, isSelected) then
                 gConfig[key] = itemValue;
-                settings.save();
+                SaveVanaDialSettings();
             end
             if isSelected then
                 imgui.SetItemDefaultFocus();
@@ -120,7 +120,7 @@ local function ColorPicker(label, colorCfg, key, tip)
     local f = ArgbToFloat4(tonumber(colorCfg[key]) or 0xFFFFFFFF);
     if imgui.ColorEdit4(label, f, ImGuiColorEditFlags_AlphaBar) then
         colorCfg[key] = Float4ToArgb(f);
-        settings.save();
+        SaveVanaDialSettings();
     end
     if tip then Tip(tip); end
 end
@@ -238,7 +238,9 @@ function M.Draw(openFlag, setOpen)
     local open = T{ openFlag };
     -- Never call imgui.End() when Begin returns false — that corrupts ImGui's stack
     -- and can crash the client when the window is closed or collapsed.
+    local began = false;
     if imgui.Begin("Vana'Dial Settings##standalone", open, ImGuiWindowFlags_None) then
+    began = true;
 
     local colorCfg = gConfig.colorCustomization and gConfig.colorCustomization.vanaTime;
 
@@ -394,13 +396,13 @@ function M.Draw(openFlag, setOpen)
                             local v = T{ math.floor(tonumber(gConfig.vanaTimeWeatherIconSize) or 28) };
                             if imgui.SliderInt(baseLbl, v, 16, 64) then
                                 gConfig.vanaTimeWeatherIconSize = v[1];
-                                settings.save();
+                                SaveVanaDialSettings();
                             end
                             if imgui.IsItemActive() then _G.XIUI_weatherBasePreview = true; end
                             Tip('Size of non-elemental weather icons. Double right-click to reset.');
                             if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
                                 gConfig.vanaTimeWeatherIconSize = 28;
-                                settings.save();
+                                SaveVanaDialSettings();
                             end
                         end
                         if (not hideNonElem and gConfig.vanaTimeWeatherAdjustElemental) or hideNonElem then
@@ -410,13 +412,13 @@ function M.Draw(openFlag, setOpen)
                             local v = T{ math.floor(tonumber(gConfig.vanaTimeWeatherElementalIconSize) or 42) };
                             if imgui.SliderInt(elemLbl, v, 16, 64) then
                                 gConfig.vanaTimeWeatherElementalIconSize = v[1];
-                                settings.save();
+                                SaveVanaDialSettings();
                             end
                             if imgui.IsItemActive() then _G.XIUI_weatherElementalPreview = true; end
                             Tip('Size of elemental weather icons. Double right-click to reset.');
                             if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
                                 gConfig.vanaTimeWeatherElementalIconSize = 42;
-                                settings.save();
+                                SaveVanaDialSettings();
                             end
                         end
                         imgui.Unindent(16);
@@ -473,12 +475,16 @@ function M.Draw(openFlag, setOpen)
                 imgui.SameLine(0, 8);
                 CB('Weather Tab##tipwx','vanaTimeTipWeather');
                 imgui.Spacing();
+                CB('Day Columns##tipday', 'vanaTimeShowTooltip');
+                Tip("Show weekday name (Firesday, Earthsday, etc.) and moon phase when hovering a day icon.");
                 CB('Fenrir Details##vt', 'vanaTimeTooltipFenrir');
                 Tip('Show Lunar Cry, Ecliptic Howl, and Ecliptic Growl values when hovering a day column.');
                 imgui.SameLine(0, 8);
                 CB("Selene's Bow##vt", 'vanaTimeTooltipSeleneBow');
                 Tip("Show Selene's Bow Ranged Accuracy / Ranged Attack values when hovering a day column.");
-                if gConfig.vanaTimeTooltipFenrir or gConfig.vanaTimeTooltipSeleneBow then
+                if gConfig.vanaTimeShowTooltip ~= false
+                    or gConfig.vanaTimeTooltipFenrir
+                    or gConfig.vanaTimeTooltipSeleneBow then
                     imgui.Indent(16);
                     imgui.Text('Tooltip direction:');
                     imgui.SameLine(0, 8);
@@ -571,8 +577,9 @@ function M.Draw(openFlag, setOpen)
         imgui.EndTabBar();
     end
 
-    imgui.End();
     end
+
+    if began then imgui.End(); end
 
     PopTheme();
     if not open[1] then

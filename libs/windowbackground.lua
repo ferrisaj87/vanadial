@@ -69,12 +69,25 @@ local function ResolveTint(color, opacity)
 end
 
 -- Cached ARGB -> ImU32 conversion (drawList:AddImage takes ImU32 tints)
+local TINT_CACHE_MAX = 384;
 local tintCache = {};
+local tintCacheSize = 0;
+
+function M.ClearTintCache()
+    tintCache = {};
+    tintCacheSize = 0;
+end
+
 local function TintU32(argb)
     local v = tintCache[argb];
     if v ~= nil then return v; end
+    if tintCacheSize >= TINT_CACHE_MAX then
+        tintCache = {};
+        tintCacheSize = 0;
+    end
     v = imgui.GetColorU32(ARGBToImGui(argb));
     tintCache[argb] = v;
+    tintCacheSize = tintCacheSize + 1;
     return v;
 end
 

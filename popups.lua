@@ -543,6 +543,18 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     local cfg = gConfig;
     if not cfg or not _ctx or not timersOpen then return; end
 
+    -- Refresh schedule data only when the second/minute rolls (not every ImGui frame).
+    local osNow = os.time();
+    if timers.NeedsUpdate(osNow) then
+        local rawTime       = data.GetRawTime();
+        local vtDay         = math.floor(rawTime / data.VD_DAY_SEC);
+        local vtHour        = math.floor(rawTime % data.VD_DAY_SEC / data.VD_HOUR_SEC);
+        local vtMin         = math.floor(rawTime % data.VD_HOUR_SEC / data.VD_MIN_F);
+        local vtMinuteOfDay = vtHour * 60 + vtMin;
+        local moonDay       = (vtDay + data.VD_MOON_OFFSET) % data.VD_MOON_DAYS;
+        timers.Update(osNow, vtMinuteOfDay, vtDay, moonDay);
+    end
+
     local mainWinPos  = _ctx.mainWinPos;
     local mainWinSize = _ctx.mainWinSize;
 
@@ -574,7 +586,9 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     if not globalFontSize or globalFontSize <= 1 then globalFontSize = 13; end
 
     local timersHovered = false;
+    local began = false;
     if imgui.Begin("Vana'Dial Timers##standalone", true, WIN_FLAGS_TIMERS) then
+    began = true;
         local fontScale = math.max(0.5, math.min(3.0, fontSize / globalFontSize));
         imgui.SetWindowFontScale(fontScale);
 
@@ -613,7 +627,7 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         end
         imgui.SetWindowFontScale(1.0);
     end
-    imgui.End();
+    if began then imgui.End(); end
 
     -- Auto-close: click outside
     if cfg.vanaTimeTimersAutoCloseClick then
@@ -714,7 +728,9 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
     imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
+    local began = false;
     if imgui.Begin("Vana'Dial Tod##standalone", true, WIN_FLAGS_WEATHER) then
+    began = true;
         local pw, ph = imgui.GetWindowSize();
         cachedTodH = ph;
         cachedTodW = pw;
@@ -781,7 +797,7 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
             end
         end
     end
-    imgui.End();
+    if began then imgui.End(); end
     imgui.PopStyleVar(2);
 end
 
@@ -836,7 +852,9 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
     imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
+    local began = false;
     if imgui.Begin("Vana'Dial Weather##standalone", true, WIN_FLAGS_WEATHER) then
+    began = true;
         local pw, ph = imgui.GetWindowSize();
         cachedWeatherH = ph;
         cachedWeatherW = pw;
@@ -896,7 +914,7 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
             end
         end
     end
-    imgui.End();
+    if began then imgui.End(); end
     imgui.PopStyleVar(2);
 end
 

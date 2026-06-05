@@ -31,8 +31,11 @@ local cachedLineHeight = 0;
 local lineHeightFrame = -1;
 local cachedOutlineCol = nil;
 
--- Multi-entry color cache keyed by ARGB integer
+-- Multi-entry color cache keyed by ARGB integer (bounded to avoid unbounded growth
+-- from animated alpha values in weather preview / moon pulse).
+local COLOR_CACHE_MAX = 384;
 local colorCache = {};
+local colorCacheSize = 0;
 
 local pos = {0, 0};
 
@@ -115,8 +118,13 @@ local function argbToU32(argb)
     if not argb then return 0xFFFFFFFF; end
     local cached = colorCache[argb];
     if cached then return cached; end
+    if colorCacheSize >= COLOR_CACHE_MAX then
+        colorCache = {};
+        colorCacheSize = 0;
+    end
     cached = imgui.GetColorU32(ARGBToImGui(argb));
     colorCache[argb] = cached;
+    colorCacheSize = colorCacheSize + 1;
     return cached;
 end
 
@@ -176,6 +184,7 @@ function M.Reset()
     cachedOutlineCol = nil;
     lineHeightFrame = -1;
     colorCache = {};
+    colorCacheSize = 0;
 end
 
 --- Measure text width and height at the given font size.

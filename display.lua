@@ -174,14 +174,16 @@ local vtCache    = { hour=-1, min=-1, str='', measW=0 };
 local ltCache    = { osMin=-1, osHour=-1, str='', measW=0 };
 local lastOsTime  = -1;
 local lastFontSize = -1;
+local moonPulseAt  = -1;
+local moonPulseVal = 0;
 
 -- ── Main window state ─────────────────────────────────────────────────────────
 
 local mainWinPos  = {x=0, y=0};
 local mainWinSize = {w=0, h=0};
 
--- Deferred Fenrir tooltip: set during Begin/End, drawn after End() on foreground list
-local pendingFenrirTooltip = nil;
+-- Deferred day-column tooltip: set during Begin/End, drawn after End() on foreground list
+local pendingDayTooltip = nil;
 
 -- Preview flags: set by config/vanatime.lua while sliders are dragged
 if _G.XIUI_weatherElementalPreview == nil then _G.XIUI_weatherElementalPreview = false; end
@@ -326,8 +328,13 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
 
         -- Pulse the % text between normal element color and glow color on new/full moon.
         if isNewMoonPhase or isFullMoonPhase then
-            -- Quantize pulse to limit unique colors per session (imtext caches by ARGB).
-            local pulse = math.floor((math.sin(os.clock() * 4.0) + 1.0) * 8 + 0.5) / 8;
+            -- Quantize pulse; refresh ~8 Hz so sin/os.clock are not per-frame.
+            local now = os.clock();
+            if now - moonPulseAt >= 0.125 then
+                moonPulseAt  = now;
+                moonPulseVal = math.floor((math.sin(now * 4.0) + 1.0) * 8 + 0.5) / 8;
+            end
+            local pulse = moonPulseVal;
             local glowColor = isNewMoonPhase
                 and (tonumber(colorConfig.moonNewColor)  or 0xFFFF4444)
                 or  (tonumber(colorConfig.moonFullColor) or 0xFF88CCFF);
@@ -369,28 +376,35 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
     return cardX, cardY, cardW, cardH;
 end
 
--- ── Fenrir tooltip ────────────────────────────────────────────────────────────
+-- ── Day column tooltip (weekday name + moon phase + optional Fenrir/Selene) ───
 
-local function DrawFenrirTooltip(drawList, cardX, cardY, cardW, cardH, moonDay, moonPercent)
-    if not (gConfig and gConfig.vanaTimeEnableTooltips ~= false
-        and (gConfig.vanaTimeTooltipFenrir or gConfig.vanaTimeTooltipSeleneBow)) then return; end
+local function DayColumnTooltipsEnabled()
+    if not gConfig or gConfig.vanaTimeEnableTooltips == false then return false; end
+    if gConfig.vanaTimeShowTooltip == false then return false; end
+    return true;
+end
+
+local function DrawDayColumnTooltip(drawList, cardX, cardY, cardW, cardH, colWeekday, moonDay, moonPercent)
+    if not DayColumnTooltipsEnabled() then return; end
     if not imgui.IsMouseHoveringRect({cardX, cardY}, {cardX + cardW, cardY + cardH}) then return; end
     DLRect(drawList, cardX, cardY, cardX + cardW, cardY + cardH,
         ToU32(0xCCFFFFFF), 6, nil, 2.0);
-    pendingFenrirTooltip = {moonDay, moonPercent};
+    pendingDayTooltip = {colWeekday, moonDay, moonPercent};
 end
 
-local function FlushFenrirTooltip()
-    if not pendingFenrirTooltip then return; end
-    local moonDay, moonPercent = pendingFenrirTooltip[1], pendingFenrirTooltip[2];
-    pendingFenrirTooltip = nil;
+local function FlushDayColumnTooltip()
+    if not pendingDayTooltip then return; end
+    local colWeekday, moonDay, moonPercent = pendingDayTooltip[1], pendingDayTooltip[2], pendingDayTooltip[3];
+    pendingDayTooltip = nil;
 
-    local showFenrir = not gConfig or gConfig.vanaTimeTooltipFenrir  ~= false;
-    local showSelene = not gConfig or gConfig.vanaTimeTooltipSeleneBow ~= false;
-    if not showFenrir and not showSelene then return; end
+    if not DayColumnTooltipsEnabled() then return; end
+
+    local showFenrir = gConfig.vanaTimeTooltipFenrir ~= false;
+    local showSelene = gConfig.vanaTimeTooltipSeleneBow ~= false;
 
     local phaseIdx  = data.GetMoonPhaseRaw(moonDay);
     local phaseName = data.PHASE_NAMES[phaseIdx] or '?';
+    local dayName   = data.GetWeekdayName(colWeekday);
 
     local dl = imgui.GetForegroundDrawList();
     if not dl then return; end
@@ -429,8 +443,6 @@ local function FlushFenrirTooltip()
         end
     end
 
-    if #rows == 0 then return; end
-
     local labelColW = 0;
     local valueColW = 0;
     for _, r in ipairs(rows) do
@@ -443,8 +455,11 @@ local function FlushFenrirTooltip()
     end
     labelColW = labelColW + colGap;
 
-    local headerStr = phaseName .. '  (' .. moonPercent .. '%)';
-    local headerW   = imtext.Measure(headerStr, fontSize);
+    local dayHeaderStr    = dayName;
+    local phaseHeaderStr  = phaseName .. '  (' .. moonPercent .. '%)';
+    local dayHeaderW      = imtext.Measure(dayHeaderStr, fontSize);
+    local phaseHeaderW    = imtext.Measure(phaseHeaderStr, fontSize);
+    local headerW         = math.max(dayHeaderW, phaseHeaderW);
 
     local maxSecW = 0;
     for _, r in ipairs(rows) do
@@ -458,7 +473,7 @@ local function FlushFenrirTooltip()
     local contentW   = math.max(headerW, maxSecW, labelColW + valueColW);
     local boxW       = contentW + pad * 2;
 
-    local boxH = pad + lineSpacing + separatorH;
+    local boxH = pad + lineSpacing + lineSpacing + separatorH;
     for i, r in ipairs(rows) do
         if r[1] == 'row' then
             boxH = boxH + lineSpacing;
@@ -485,7 +500,9 @@ local function FlushFenrirTooltip()
     DLRect(dl, ox, oy, ox + boxW, oy + boxH, borderCol, 4, nil, 1.0);
 
     local curY = oy + pad;
-    imtext.Draw(dl, headerStr, ox + pad, curY, 0xFFF4DA97, fontSize);
+    imtext.Draw(dl, dayHeaderStr, ox + pad, curY, 0xFFF4DA97, fontSize);
+    curY = curY + lineSpacing;
+    imtext.Draw(dl, phaseHeaderStr, ox + pad, curY, 0xFFFFFFFF, fontSize);
     curY = curY + lineSpacing;
 
     local sepLineY = curY + math.floor(separatorH / 2);
@@ -532,11 +549,14 @@ function M.Reset()
     ltCache    = { osMin=-1, osHour=-1, str='', measW=0 };
     lastOsTime  = -1;
     lastFontSize = -1;
+    windowbg.ClearTintCache();
+    imtext.Reset();
 end
 
 function M.Cleanup()
     -- Release D3D textures held by the shared TextureManager cache.
     TextureManager.clear();
+    windowbg.ClearTintCache();
     imtext.Reset();
     -- Clear shared texture tables in place so popups' context keeps referencing
     -- the same tables (a fresh {} would orphan popups._ctx and the old textures).
@@ -559,7 +579,7 @@ function M.DrawWindow(weatherId)
     local cfg = gConfig;
     if not cfg then return; end
 
-    pendingFenrirTooltip = nil;
+    pendingDayTooltip = nil;
 
     -- Draw after other modules may have called imtext.SetConfigFromSettings
     -- (Tahoma Bold @ 20px by default). Standalone has its own imtext instance, so we must
@@ -583,11 +603,6 @@ function M.DrawWindow(weatherId)
     local vtMinuteOfDay = vtHour * 60 + vtMin;
     local moonDay       = (math.floor(rawTime / data.VD_DAY_SEC) + data.VD_MOON_OFFSET) % data.VD_MOON_DAYS;
     local moonPct       = data.CalcMoonPercent(moonDay);
-
-    local showTimers = cfg.vanaTimeShowTimers ~= false;
-    if showTimers and popups.IsTimersOpen() then
-        timers.Update(os.time(), vtMinuteOfDay, vtDay, moonDay);
-    end
 
     local pastWeekday   = (weekday  - 1 + 8)                   % 8;
     local futureWeekday = (weekday  + 1)                        % 8;
@@ -629,6 +644,10 @@ function M.DrawWindow(weatherId)
     -- ── Column layout geometry ───────────────────────────────────────────────
     local colPad = 8;
 
+    -- Hoisted here: also used after imgui.End for timer/weather/TOD popups.
+    local showGear   = cfg.vanaTimeShowSettingsBtn ~= false;
+    local showTimers = cfg.vanaTimeShowTimers ~= false;
+
     if fontSize ~= lastFontSize then
         lastFontSize   = fontSize;
         vtCache.measW  = 0;
@@ -654,8 +673,10 @@ function M.DrawWindow(weatherId)
 
     ApplyWindowPosition('VanaDial');
 
+    local began = false;
     local ok, err = pcall(function()
-    if imgui.Begin("Vana'Dial##standalone", true, windowFlags) then
+    began = imgui.Begin("Vana'Dial##standalone", true, windowFlags);
+    if began then
         SaveWindowPosition('VanaDial');
 
         local wx, wy = imgui.GetWindowPos();
@@ -673,7 +694,6 @@ function M.DrawWindow(weatherId)
         local SEP_GAP       = 4;
         local sepArrowW     = math.floor(iconSize * 0.5);
 
-        local showGear        = cfg.vanaTimeShowSettingsBtn ~= false;
         local showPastFuture  = cfg.vanaTimeShowPastFuture ~= false;
         local showMoon        = cfg.vanaTimeShowMoonPercent ~= false;
         local showBadge       = cfg.vanaTimeShowWeaknessBadge ~= false;
@@ -912,7 +932,7 @@ function M.DrawWindow(weatherId)
             local pcx, pcy, pcw, pch = DrawDayColumn(drawList, pastX, colY, pastWeekday,
                 pastMoonPct, pastMoonDay, pastFutureAlpha,
                 iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawFenrirTooltip(drawList, pcx, pcy, pcw, pch, pastMoonDay, pastMoonPct);
+            DrawDayColumnTooltip(drawList, pcx, pcy, pcw, pch, pastWeekday, pastMoonDay, pastMoonPct);
 
             local arr1X   = pastX + colContentW + CARD_PAD + SEP_GAP;
             local arrImgW = sepArrowW;
@@ -931,7 +951,7 @@ function M.DrawWindow(weatherId)
             local ccx, ccy, ccw, cch = DrawDayColumn(drawList, curX, colY, weekday,
                 moonPct, moonDay, 1.0,
                 iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawFenrirTooltip(drawList, ccx, ccy, ccw, cch, moonDay, moonPct);
+            DrawDayColumnTooltip(drawList, ccx, ccy, ccw, cch, weekday, moonDay, moonPct);
 
             local arr2X = curX + colContentW + CARD_PAD + SEP_GAP;
             if arrTex then
@@ -945,13 +965,13 @@ function M.DrawWindow(weatherId)
             local fcx, fcy, fcw, fch = DrawDayColumn(drawList, futX, colY, futureWeekday,
                 futureMoonPct, futureMoonDay, pastFutureAlpha,
                 iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawFenrirTooltip(drawList, fcx, fcy, fcw, fch, futureMoonDay, futureMoonPct);
+            DrawDayColumnTooltip(drawList, fcx, fcy, fcw, fch, futureWeekday, futureMoonDay, futureMoonPct);
         else
             local cardOffX = math.floor((contentW - cardW) / 2);
             local ccx, ccy, ccw, cch = DrawDayColumn(drawList, cardX0 + cardOffX + CARD_PAD, colY, weekday,
                 moonPct, moonDay, 1.0,
                 iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawFenrirTooltip(drawList, ccx, ccy, ccw, cch, moonDay, moonPct);
+            DrawDayColumnTooltip(drawList, ccx, ccy, ccw, cch, weekday, moonDay, moonPct);
         end
 
         -- LT below day columns when past/future is hidden
@@ -965,15 +985,15 @@ function M.DrawWindow(weatherId)
                 end
             end
         end
-    end -- imgui.Begin
+    end -- began
     end); -- pcall
-    imgui.End();
+    if began then imgui.End(); end
     imgui.PopStyleVar(2);
     if not ok then
         error(err, 2);
     end
 
-    FlushFenrirTooltip();
+    FlushDayColumnTooltip();
 
     -- ── Popup stacking offsets ────────────────────────────────────────────────
     local todEnabled    = cfg.vanaTimeTodPopup == true;
@@ -983,7 +1003,12 @@ function M.DrawWindow(weatherId)
     if cfg.vanaTimeShowWeather ~= false and cfg.vanaTimeWeatherHideNonElemental then
         if os.clock() < (_G.XIUI_weatherTestExpiry or 0) then
             weatherTestId    = 4;  -- Hot Spell / Fire (first elemental in HorizonXI ordering)
-            weatherTestAlpha = 0.35 + 0.65 * math.abs(math.sin(os.clock() * 3));
+            local now = os.clock();
+            if now - moonPulseAt >= 0.125 then
+                moonPulseAt  = now;
+                moonPulseVal = math.floor((math.sin(now * 3) + 1.0) * 8 + 0.5) / 8;
+            end
+            weatherTestAlpha = 0.35 + 0.65 * moonPulseVal;
         end
     else
         _G.XIUI_weatherTestExpiry = 0;

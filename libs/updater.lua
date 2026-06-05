@@ -37,6 +37,10 @@ local _version            = '0.0.0';
 local _loginCheckAt        = nil;
 local _loginCheckDone      = false;
 
+-- Incremental download state (one HTTPS fetch per packet_in tick).
+local _updateJob = nil;
+local _updateTickAt = -1;
+
 local UPDATE_FILES = {};
 
 local function BuildUpdateFiles()
@@ -164,50 +168,94 @@ function M.CheckAndNotify(manual)
     end
 end
 
+function M.IsUpdateInProgress()
+    return _updateJob ~= nil;
+end
+
 function M.RunUpdate()
-    local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
+    if _updateJob then
+        PrintMsg('Update already in progress.');
+        return;
+    end
+    _updateJob = { phase = 'check' };
+    PrintMsg('Checking for updates...');
+end
 
-    if not ok or code ~= 200 or not body then
-        PrintMsg('Could not check for updates. Try again later.');
+local function FinishUpdateJob(success)
+    _updateJob = nil;
+    _updateTickAt = -1;
+    if success then
+        PrintMsg('Addon has been successfully updated, use /addon reload vanadial to reload newest version.');
+    else
+        PrintMsg('Update failed. Try again or download from GitHub.');
+    end
+end
+
+function M.TickUpdate()
+    if not _updateJob then return; end
+
+    -- Present + packet_in both call this; at most one step per frame time.
+    local now = os.clock();
+    if now == _updateTickAt then return; end
+    _updateTickAt = now;
+
+    local job = _updateJob;
+
+    if job.phase == 'check' then
+        local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
+        if not ok or code ~= 200 or not body then
+            FinishUpdateJob(false);
+            return;
+        end
+
+        local remote = ParseVersionFromBody(body);
+        if not remote then
+            FinishUpdateJob(false);
+            return;
+        end
+
+        if not VersionGreater(remote, _version) then
+            _updateJob = nil;
+            _updateTickAt = -1;
+            PrintMsg('Already up to date.');
+            return;
+        end
+
+        job.phase  = 'download';
+        job.index  = 1;
+        job.total  = #UPDATE_FILES;
+        job.remote = remote;
+        PrintMsg("Updating Vana'Dial....");
         return;
     end
 
-    local remote = ParseVersionFromBody(body);
-    if not remote then
-        PrintMsg('Could not check for updates. Try again later.');
-        return;
-    end
+    if job.phase == 'download' then
+        local i = job.index;
+        local f = UPDATE_FILES[i];
+        if not f then
+            FinishUpdateJob(true);
+            return;
+        end
 
-    if not VersionGreater(remote, _version) then
-        PrintMsg('Already up to date.');
-        return;
-    end
-
-    PrintMsg("Updating Vana'Dial....");
-
-    local allOk = true;
-
-    for _, f in ipairs(UPDATE_FILES) do
         local fok, fbody, fcode = FetchUrl(f.url);
-
         if not fok or fcode ~= 200 or not fbody or fbody == '' then
-            allOk = false;
-            break;
+            FinishUpdateJob(false);
+            return;
         end
 
         local out = io.open(f.path, 'wb');
         if not out then
-            allOk = false;
-            break;
+            FinishUpdateJob(false);
+            return;
         end
         out:write(fbody);
         out:close();
-    end
 
-    if allOk then
-        PrintMsg('Addon has been successfully updated, use /addon reload vanadial to reload newest version.');
-    else
-        PrintMsg('Update failed. Try again or download from GitHub.');
+        job.index = i + 1;
+        -- Light progress so long downloads do not look frozen.
+        if (i % 3) == 1 or i == job.total then
+            PrintMsg(string.format('Downloading %d/%d...', i, job.total));
+        end
     end
 end
 

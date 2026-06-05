@@ -100,6 +100,16 @@ M.ELEM_KEYS = {
     [4]='elementIce',  [5]='elementLightning', [6]='elementLight', [7]='elementDark',
 };
 
+-- Vana'diel weekday names (index 0 = Firesday, matches element/weekday rotation).
+M.WEEKDAY_NAMES = {
+    [0]='Firesday',      [1]='Earthsday',    [2]='Watersday', [3]='Windsday',
+    [4]='Iceday',        [5]='Lightningday', [6]='Lightsday', [7]='Darksday',
+};
+
+function M.GetWeekdayName(weekdayIndex)
+    return M.WEEKDAY_NAMES[weekdayIndex % 8] or 'Unknown';
+end
+
 function M.GetTodName(vtHour)
     if vtHour >= 20 or vtHour < 4 then
         return 'Dead of Night';

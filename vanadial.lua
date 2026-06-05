@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.2.6';
+addon.version = '1.3.4';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -48,6 +48,7 @@ InvalidateColorCaches   = colorLib.InvalidateColorCaches;
 GetColorSetting         = colorLib.GetColorSetting;
 GetGradientSetting      = colorLib.GetGradientSetting;
 GetGradientTextColor    = colorLib.GetGradientTextColor;
+local imtext            = require('libs.imtext');
 
 -- ── Settings ──────────────────────────────────────────────────────────────────
 local defaults = T{
@@ -160,6 +161,15 @@ local function MarkSettingsDirty()
     _settingsDirtyAt = os.clock();
 end
 
+-- Never persist appliedPositions (session-only; corrupts re-apply on reload).
+function SaveVanaDialSettings()
+    if not gConfig then return; end
+    local applied = gConfig.appliedPositions;
+    gConfig.appliedPositions = nil;
+    settings.save();
+    gConfig.appliedPositions = applied or T{};
+end
+
 local function EnsureDefaultWindowPosition(persist)
     if not gConfig.windowPositions then
         gConfig.windowPositions = T{};
@@ -174,8 +184,11 @@ end
 
 local function OnCharacterSettingsReady(s)
     if s ~= nil then
+        s.appliedPositions = nil;
         gConfig = s;
     end
+    InvalidateColorCaches();
+    imtext.Reset();
     MigrateWindowSettings();
     if not gConfig.appliedPositions then
         gConfig.appliedPositions = T{};
@@ -242,6 +255,7 @@ function SaveWindowPosition(windowName)
     local x, y = imgui.GetWindowPos();
     -- Ignore garbage positions during zoning / loading screens.
     if x < 1 and y < 1 then return; end
+    if x > 10000 or y > 10000 then return; end
     if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
     local saved = gConfig.windowPositions[windowName];
     if not saved then
@@ -265,7 +279,6 @@ require('libs.imgui_compat');
 local display         = require('display');
 local popups          = require('popups');
 local config          = require('config');
-local imtext          = require('libs.imtext');
 local TextureManager  = require('libs.texturemanager');
 
 -- ── Module state ──────────────────────────────────────────────────────────────
@@ -281,6 +294,16 @@ local function IsPlayerZoning(player)
     local ok, zoning = pcall(function() return player:GetIsZoning(); end);
     return ok and zoning == true;
 end
+
+-- Per-present-frame cache: avoid duplicate memory reads and throttle menu/chat scans.
+local _presentTick      = -1;
+local _presentInWorld   = false;
+local _presentMenuOpen  = false;
+local _presentChatOpen  = false;
+local _menuChatTick      = -1;
+local _inWorldTick       = -1;
+local MENU_CHAT_INTERVAL = 0.12; -- menu/chat memory reads
+local IN_WORLD_INTERVAL  = 0.15; -- party/entity probe; zone-in lags slightly at most this long
 
 local function IsPlayerInWorld()
     local ok, ready = pcall(function()
@@ -307,16 +330,13 @@ local function IsPlayerInWorld()
     return ok and ready;
 end
 
-local function ShouldDrawMain()
-    if hidden then return false; end
-    if gConfig.showVanaDial == false then return false; end
-    return IsPlayerInWorld();
-end
-
 local function BeginZoning()
     _allowPositionSave = false;
     if not gConfig.appliedPositions then gConfig.appliedPositions = T{}; end
     gConfig.appliedPositions[WINDOW_KEY] = nil;
+    _presentTick   = -1;
+    _menuChatTick  = -1;
+    _inWorldTick   = -1;
 end
 local pendingWeatherRead = false;
 local pendingWeatherTime = 0;
@@ -468,6 +488,41 @@ local function IsChatExpanded()
     return false;
 end
 
+-- Must be defined AFTER IsGameMenuOpen / IsChatExpanded (Lua resolves locals at compile time).
+local function RefreshPresentCache()
+    local t = os.clock();
+    if t == _presentTick then return; end
+    _presentTick = t;
+
+    if hidden or gConfig.showVanaDial == false then
+        _presentInWorld = false;
+        _inWorldTick    = t;
+    elseif _inWorldTick < 0 or (t - _inWorldTick) >= IN_WORLD_INTERVAL then
+        _inWorldTick    = t;
+        _presentInWorld = IsPlayerInWorld();
+    end
+
+    local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
+    local needChat = gConfig.vanaTimeHideOnChatExpanded == true;
+    if needMenu or needChat then
+        if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL then
+            _menuChatTick = t;
+            _presentMenuOpen = needMenu and IsGameMenuOpen() or false;
+            _presentChatOpen = needChat and IsChatExpanded() or false;
+        end
+    else
+        _presentMenuOpen = false;
+        _presentChatOpen = false;
+        _menuChatTick    = t;
+    end
+end
+
+local function ShouldDrawMain()
+    if hidden then return false; end
+    if gConfig.showVanaDial == false then return false; end
+    return _presentInWorld;
+end
+
 -- ── Events ────────────────────────────────────────────────────────────────────
 
 ashita.events.register('load', 'vd_load', function()
@@ -491,22 +546,25 @@ ashita.events.register('unload', 'vd_unload', function()
     display.Cleanup();
     -- Flush any pending window-position changes so a drag right before unload
     -- (or reload) is never lost.
-    settings.save();
+    SaveVanaDialSettings();
 end);
 
 ashita.events.register('d3d_present', 'vd_present', function()
     TextureManager.FlushPendingReleases();
-    updater.TickLoginCheck();
+    -- One download step per frame so /vd update still progresses without packet traffic.
+    updater.TickUpdate();
 
-    if IsPlayerInWorld() then
+    RefreshPresentCache();
+
+    if _presentInWorld then
         _allowPositionSave = true;
     end
 
     if ShouldDrawMain() then
         -- Hide the clock + popups while a game menu or expanded chat log is open.
         -- The config window (below) is intentionally NOT gated so it stays usable.
-        local menuHidden = gConfig.vanaTimeHideOnMenuFocus and IsGameMenuOpen();
-        local chatHidden = gConfig.vanaTimeHideOnChatExpanded and IsChatExpanded();
+        local menuHidden = _presentMenuOpen;
+        local chatHidden = _presentChatOpen;
 
         if not menuHidden and not chatHidden then
             -- Deferred weather re-read after zone-in.
@@ -529,7 +587,7 @@ ashita.events.register('d3d_present', 'vd_present', function()
     -- every frame of a drag.
     if _settingsDirty and (os.clock() - _settingsDirtyAt) > 0.75 then
         _settingsDirty = false;
-        settings.save();
+        SaveVanaDialSettings();
     end
 end);
 
@@ -538,6 +596,8 @@ ashita.events.register('zone_change', 'vd_zone_change', function()
 end);
 
 ashita.events.register('packet_in', 'vd_packet', function(e)
+    updater.TickLoginCheck();
+
     if e.id == 0x000A then
         BeginZoning();
         ResetWeatherState();
@@ -599,7 +659,7 @@ ashita.events.register('command', 'vd_command', function(e)
         if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
         gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
         gConfig.appliedPositions = {};
-        settings.save();
+        SaveVanaDialSettings();
         print("[Vana'Dial] Position reset to (100, 100).");
 
     elseif sub == 'update' then
