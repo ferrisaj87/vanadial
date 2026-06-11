@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.3.8';
+addon.version = '1.3.9';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
