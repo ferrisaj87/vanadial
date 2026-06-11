@@ -5,18 +5,16 @@
 
 local M = {};
 
-local https = require('socket.ssl.https');
-local http  = require('socket.http');
+local https     = require('socket.ssl.https');
+local http      = require('socket.http');
+local chatprint = require('libs.chatprint');
 http.TIMEOUT = 15;
 
 local RAW_BASE = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/main/';
 
 local UPDATE_VERSION_URL = RAW_BASE .. 'vanadial.lua';
 
--- Login update check runs once after the HorizonXI welcome line in chat (see vanadial.lua text_in).
-
-local MSG_UP_TO_DATE  = "Vana'Dial is up to date!";
-local MSG_UPDATE_AVAIL = "A new version of Vana'Dial is available! /vd update to get the latest version!";
+-- Login update check runs after the HorizonXI welcome line in chat (see vanadial.lua text_in).
 
 -- All runtime Lua files shipped with the addon (relative to addons/vanadial/).
 local UPDATE_RELATIVE = {
@@ -32,12 +30,18 @@ local UPDATE_RELATIVE = {
     'libs/imtext.lua',
     'libs/windowbackground.lua',
     'libs/memory.lua',
+    'libs/chatprint.lua',
     'libs/updater.lua',
 };
 
 local _version             = '0.0.0';
 local _loginCheckDone      = false;
 local _loginCheckPending   = false;
+local _loginCheckAt        = nil;
+local _lastNotifyAt        = -999;
+local LOGIN_NOTIFY_COOLDOWN = 3.0;
+local LOGIN_CHECK_DELAY_SEC = 0.25;
+local ZONE_CHECK_FALLBACK_SEC = 3.0;
 
 -- Incremental download state (one HTTPS fetch per packet_in tick).
 local _updateJob = nil;
@@ -88,12 +92,9 @@ function M.IsNewer(remote, localVer)
 end
 
 -- FFXI chat is not UTF-8; strip non-ASCII so glyphs do not become garbage.
-local function SanitizeChat(text)
-    return tostring(text or ''):gsub('[^\32-\126]', '');
-end
 
 local function PrintMsg(msg)
-    print("[Vana'Dial] " .. SanitizeChat(msg));
+    chatprint.Print(msg);
 end
 
 local function ParseVersionFromBody(body)
@@ -130,25 +131,54 @@ function M.GetVersion()
 end
 
 local function NotifyVersionStatus(remote)
-    if remote and remote ~= '' and _version and _version ~= ''
-        and VersionGreater(remote, _version) then
-        PrintMsg(MSG_UPDATE_AVAIL);
+    if not remote or remote == '' then
+        PrintMsg(string.format("Vana'Dial v%s — could not check GitHub for updates.", _version or '?'));
+        return;
+    end
+    if _version and _version ~= '' and VersionGreater(remote, _version) then
+        PrintMsg(string.format(
+            "A new version of Vana'Dial is available (v%s)! /vd update to get the latest version!",
+            remote));
     else
-        PrintMsg(MSG_UP_TO_DATE);
+        PrintMsg(string.format("Vana'Dial v%s is up to date!", _version or '?'));
     end
 end
 
 function M.OnWelcomeChat()
     _loginCheckDone    = false;
     _loginCheckPending = true;
+    _loginCheckAt      = os.clock() + LOGIN_CHECK_DELAY_SEC;
+end
+
+-- Each zone-in resets the login check; welcome chat re-arms it (see vanadial.lua text_in).
+-- If welcome never appears (some char switches), fall back after a few seconds.
+function M.OnZoneIn()
+    _loginCheckDone    = false;
+    _loginCheckPending = false;
+    _loginCheckAt      = nil;
+
+    ashita.tasks.once(ZONE_CHECK_FALLBACK_SEC, function()
+        if not _loginCheckDone then
+            M.OnWelcomeChat();
+        end
+    end);
 end
 
 function M.TickLoginCheck()
     if _loginCheckDone or not _loginCheckPending then
         return;
     end
+    if _loginCheckAt and os.clock() < _loginCheckAt then
+        return;
+    end
     _loginCheckDone    = true;
     _loginCheckPending = false;
+    _loginCheckAt      = nil;
+
+    if os.clock() - _lastNotifyAt < LOGIN_NOTIFY_COOLDOWN then
+        return;
+    end
+    _lastNotifyAt = os.clock();
 
     pcall(function()
         NotifyVersionStatus(FetchRemoteVersion());
@@ -219,7 +249,7 @@ function M.TickUpdate()
         if not VersionGreater(remote, _version) then
             _updateJob = nil;
             _updateTickAt = -1;
-            PrintMsg(MSG_UP_TO_DATE);
+            PrintMsg(string.format("Vana'Dial v%s is up to date!", _version or '?'));
             return;
         end
 

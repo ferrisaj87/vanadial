@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.3.9';
+addon.version = '1.4.0';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -31,7 +31,9 @@ local bit      = require('bit');
 -- XIUI's handlers/helpers.lua exposes these as bare globals; we mirror that here
 -- from our bundled color lib so windowbackground.lua, imtext.lua, etc. work.
 local colorLib          = require('libs.color');
+local chatprint         = require('libs.chatprint');
 local updater           = require('libs.updater');
+VanaDialPrint           = chatprint.Print;
 updater.Init(addon.version);
 ARGBToRGBA              = colorLib.ARGBToRGBA;
 RGBAToARGB              = colorLib.RGBAToARGB;
@@ -569,8 +571,9 @@ end);
 
 ashita.events.register('text_in', 'vd_welcome', function(e)
     if e.injected or e.blocked then return; end
-    local msg = e.message or '';
-    if msg:find('<<< Welcome to', 1, true) then
+    local msg = e.message or e.message_modified or '';
+    if msg:find('<<< Welcome to', 1, true)
+        or msg:find('Welcome to HorizonXI', 1, true) then
         updater.OnWelcomeChat();
     end
 end);
@@ -617,7 +620,7 @@ ashita.events.register('d3d_present', 'vd_present', function()
                 display.DrawWindow(weatherId);
             end);
             if not ok then
-                print("[Vana'Dial] Draw error: " .. tostring(err));
+                VanaDialPrint('Draw error: ' .. tostring(err));
             end
         end
     end
@@ -643,6 +646,7 @@ ashita.events.register('packet_in', 'vd_packet', function(e)
     updater.TickLoginCheck();
 
     if e.id == 0x000A then
+        updater.OnZoneIn();
         BeginZoning();
         ResetWeatherState();
         _pGameMenu = nil;
@@ -675,9 +679,9 @@ ashita.events.register('command', 'vd_command', function(e)
     if sub == '' then
         hidden = not hidden;
         if hidden then
-            print("[Vana'Dial] Hidden.");
+            VanaDialPrint('Hidden.');
         else
-            print("[Vana'Dial] Shown.");
+            VanaDialPrint('Shown.');
         end
 
     elseif sub == 'config' then
@@ -704,7 +708,7 @@ ashita.events.register('command', 'vd_command', function(e)
         gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
         gConfig.appliedPositions = {};
         SaveVanaDialSettings();
-        print("[Vana'Dial] Position reset to (100, 100).");
+        VanaDialPrint('Position reset to (100, 100).');
 
     elseif sub == 'update' then
         updater.RunUpdate();
@@ -713,16 +717,16 @@ ashita.events.register('command', 'vd_command', function(e)
         updater.CheckAndNotify(true);
 
     else
-        print("[Vana'Dial] Commands:");
-        print('  /vd               - Toggle visibility');
-        print('  /vd config        - Open config window');
-        print('  /vd ships         - Toggle airship timers (vtships ok)');
-        print('  /vd boats         - Toggle boat timers (vtboats ok)');
-        print('  /vd rse           - Toggle RSE timers (vtrse ok)');
-        print('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
-        print('  /vd reset         - Reset window position');
-        print('  /vd update        - Download latest from GitHub');
-        print('  /vd checkupdate   - Check GitHub for updates');
-        print('  /vanadial         - Alias for /vd');
+        VanaDialPrint('Commands:');
+        VanaDialPrint('  /vd               - Toggle visibility');
+        VanaDialPrint('  /vd config        - Open config window');
+        VanaDialPrint('  /vd ships         - Toggle airship timers (vtships ok)');
+        VanaDialPrint('  /vd boats         - Toggle boat timers (vtboats ok)');
+        VanaDialPrint('  /vd rse           - Toggle RSE timers (vtrse ok)');
+        VanaDialPrint('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
+        VanaDialPrint('  /vd reset         - Reset window position');
+        VanaDialPrint('  /vd update        - Download latest from GitHub');
+        VanaDialPrint('  /vd checkupdate   - Check GitHub for updates');
+        VanaDialPrint('  /vanadial         - Alias for /vd');
     end
 end);

@@ -973,13 +973,13 @@ function M.DrawWindow(weatherId)
     if began then imgui.End(); end
     imgui.PopStyleVar(2);
     if not ok then
-        print("[Vana'Dial] Draw error: " .. tostring(err));
+        VanaDialPrint('Draw error: ' .. tostring(err));
         return;
     end
 
     local tipOk, tipErr = pcall(DrawDayColumnTooltipWindow);
     if not tipOk then
-        print("[Vana'Dial] Tooltip error: " .. tostring(tipErr));
+        VanaDialPrint('Tooltip error: ' .. tostring(tipErr));
     end
 
     -- ── Popup stacking offsets ────────────────────────────────────────────────
