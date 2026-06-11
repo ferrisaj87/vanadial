@@ -38,10 +38,7 @@ local _version             = '0.0.0';
 local _loginCheckDone      = false;
 local _loginCheckPending   = false;
 local _loginCheckAt        = nil;
-local _lastNotifyAt        = -999;
-local LOGIN_NOTIFY_COOLDOWN = 3.0;
 local LOGIN_CHECK_DELAY_SEC = 0.25;
-local ZONE_CHECK_FALLBACK_SEC = 3.0;
 
 -- Incremental download state (one HTTPS fetch per packet_in tick).
 local _updateJob = nil;
@@ -144,24 +141,11 @@ local function NotifyVersionStatus(remote)
     end
 end
 
+-- Armed by the HorizonXI welcome chat line only (see vanadial.lua text_in).
 function M.OnWelcomeChat()
     _loginCheckDone    = false;
     _loginCheckPending = true;
     _loginCheckAt      = os.clock() + LOGIN_CHECK_DELAY_SEC;
-end
-
--- Each zone-in resets the login check; welcome chat re-arms it (see vanadial.lua text_in).
--- If welcome never appears (some char switches), fall back after a few seconds.
-function M.OnZoneIn()
-    _loginCheckDone    = false;
-    _loginCheckPending = false;
-    _loginCheckAt      = nil;
-
-    ashita.tasks.once(ZONE_CHECK_FALLBACK_SEC, function()
-        if not _loginCheckDone then
-            M.OnWelcomeChat();
-        end
-    end);
 end
 
 function M.TickLoginCheck()
@@ -174,11 +158,6 @@ function M.TickLoginCheck()
     _loginCheckDone    = true;
     _loginCheckPending = false;
     _loginCheckAt      = nil;
-
-    if os.clock() - _lastNotifyAt < LOGIN_NOTIFY_COOLDOWN then
-        return;
-    end
-    _lastNotifyAt = os.clock();
 
     pcall(function()
         NotifyVersionStatus(FetchRemoteVersion());

@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.1';
+addon.version = '1.4.2';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -646,7 +646,6 @@ ashita.events.register('packet_in', 'vd_packet', function(e)
     updater.TickLoginCheck();
 
     if e.id == 0x000A then
-        updater.OnZoneIn();
         BeginZoning();
         ResetWeatherState();
         _pGameMenu = nil;
