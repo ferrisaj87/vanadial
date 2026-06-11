@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.3.5';
+addon.version = '1.3.6';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -574,7 +574,12 @@ ashita.events.register('d3d_present', 'vd_present', function()
                 if w ~= nil then weatherId = w; end
             end
 
-            display.DrawWindow(weatherId);
+            local ok, err = pcall(function()
+                display.DrawWindow(weatherId);
+            end);
+            if not ok then
+                print("[Vana'Dial] Draw error: " .. tostring(err));
+            end
         end
     end
 

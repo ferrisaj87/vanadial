@@ -15,8 +15,9 @@
 
 require('common');
 local bit    = require('bit');
-local imgui  = require('imgui');
-local imtext = require('libs.imtext');
+local imgui    = require('imgui');
+local imtext   = require('libs.imtext');
+local colorLib = require('libs.color');
 
 local TextureManager = require('libs.texturemanager');
 local windowbg       = require('libs.windowbackground');
@@ -120,6 +121,38 @@ local function LerpArgb(c1, c2, t)
     return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b);
 end
 
+-- RGB lerp passes through unintended hues (e.g. fire orange → moon red → green).
+local function LerpArgbHsv(c1, c2, t)
+    t = math.max(0, math.min(1, t));
+    local a1 = bit.band(bit.rshift(c1, 24), 0xFF);
+    local r1 = bit.band(bit.rshift(c1, 16), 0xFF);
+    local g1 = bit.band(bit.rshift(c1,  8), 0xFF);
+    local b1 = bit.band(c1, 0xFF);
+    local a2 = bit.band(bit.rshift(c2, 24), 0xFF);
+    local r2 = bit.band(bit.rshift(c2, 16), 0xFF);
+    local g2 = bit.band(bit.rshift(c2,  8), 0xFF);
+    local b2 = bit.band(c2, 0xFF);
+    local h1, s1, v1 = colorLib.rgbToHsv(r1 / 255, g1 / 255, b1 / 255);
+    local h2, s2, v2 = colorLib.rgbToHsv(r2 / 255, g2 / 255, b2 / 255);
+    local dh = h2 - h1;
+    if dh > 0.5 then
+        dh = dh - 1;
+    elseif dh < -0.5 then
+        dh = dh + 1;
+    end
+    local h = h1 + dh * t;
+    if h < 0 then
+        h = h + 1;
+    elseif h >= 1 then
+        h = h - 1;
+    end
+    local s = s1 + (s2 - s1) * t;
+    local v = v1 + (v2 - v1) * t;
+    local r, g, b = colorLib.hsvToRgb(h, s, v);
+    local a = math.floor(a1 + (a2 - a1) * t + 0.5);
+    return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b);
+end
+
 local function GetOutlineColor(weekday)
     return 0xFF000000;
 end
@@ -172,10 +205,17 @@ end
 
 local vtCache    = { hour=-1, min=-1, str='', measW=0 };
 local ltCache    = { osMin=-1, osHour=-1, str='', measW=0 };
-local lastOsTime  = -1;
+local lastOsTime   = -1;
 local lastFontSize = -1;
-local moonPulseAt  = -1;
-local moonPulseVal = 0;
+
+-- Full bright/dim cycle for new/full moon % text (and weather-test preview pulse).
+local MOON_PULSE_PERIOD = 2.8;
+
+local function GetMoonPulse(now)
+    now = now or os.clock();
+    local raw = (math.sin(now * (2 * math.pi / MOON_PULSE_PERIOD)) + 1) * 0.5;
+    return math.floor(raw * 24 + 0.5) / 24;
+end
 
 -- ── Main window state ─────────────────────────────────────────────────────────
 
@@ -326,19 +366,15 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
                 phIconX + phaseIconSize, phIconY + phaseIconSize, ToU32(WithAlpha(0xFFFFFFFF, alpha)));
         end
 
-        -- Pulse the % text between normal element color and glow color on new/full moon.
+        -- Pulse % text: element color ↔ moon phase color (new=red, full=blue).
         if isNewMoonPhase or isFullMoonPhase then
-            -- Quantize pulse; refresh ~8 Hz so sin/os.clock are not per-frame.
-            local now = os.clock();
-            if now - moonPulseAt >= 0.125 then
-                moonPulseAt  = now;
-                moonPulseVal = math.floor((math.sin(now * 4.0) + 1.0) * 8 + 0.5) / 8;
-            end
-            local pulse = moonPulseVal;
-            local glowColor = isNewMoonPhase
-                and (tonumber(colorConfig.moonNewColor)  or 0xFFFF4444)
-                or  (tonumber(colorConfig.moonFullColor) or 0xFF88CCFF);
-            textArgb = LerpArgb(textArgb, WithAlpha(glowColor, alpha), pulse);
+            local baseArgb = textArgb;
+            local moonArgb = WithAlpha(
+                isNewMoonPhase
+                    and (tonumber(colorConfig.moonNewColor)  or 0xFFFF4444)
+                    or  (tonumber(colorConfig.moonFullColor) or 0xFF88CCFF),
+                alpha);
+            textArgb = LerpArgbHsv(baseArgb, moonArgb, GetMoonPulse());
         end
 
         DrawTextWithOutline(drawList, moonStr, moonTextX, moonBaseY, textArgb, outlineArgb, fontSize);
@@ -392,7 +428,25 @@ local function DrawDayColumnTooltip(drawList, cardX, cardY, cardW, cardH, colWee
     pendingDayTooltip = {colWeekday, moonDay, moonPercent};
 end
 
-local function FlushDayColumnTooltip()
+-- Draw via a real ImGui window (Begin/End). Do NOT use GetForegroundDrawList +
+-- imtext.Draw after imgui.End — that races the renderer and causes
+-- EXCEPTION_ACCESS_VIOLATION (random addon blamed on the next event).
+local TIP_WIN_FLAGS = bit.bor(
+    ImGuiWindowFlags_NoDecoration,
+    ImGuiWindowFlags_AlwaysAutoResize,
+    ImGuiWindowFlags_NoInputs,
+    ImGuiWindowFlags_NoFocusOnAppearing,
+    ImGuiWindowFlags_NoNav,
+    ImGuiWindowFlags_NoSavedSettings,
+    ImGuiWindowFlags_NoMove,
+    ImGuiWindowFlags_NoDocking
+);
+
+local COL_TIP_GOLD   = {0.957, 0.855, 0.592, 1.0};
+local COL_TIP_HEADER = {0.796, 0.667, 0.313, 1.0};
+local COL_TIP_LABEL  = {0.667, 0.667, 0.667, 1.0};
+
+local function DrawDayColumnTooltipWindow()
     if not pendingDayTooltip then return; end
     local colWeekday, moonDay, moonPercent = pendingDayTooltip[1], pendingDayTooltip[2], pendingDayTooltip[3];
     pendingDayTooltip = nil;
@@ -406,126 +460,55 @@ local function FlushDayColumnTooltip()
     local phaseName = data.PHASE_NAMES[phaseIdx] or '?';
     local dayName   = data.GetWeekdayName(colWeekday);
 
-    local dl = imgui.GetForegroundDrawList();
-    if not dl then return; end
-
-    local fontSize    = 12;
-    local pad         = 8;
-    local lineSpacing = fontSize + 5;
-    local colGap      = 10;
-    local sectionGap  = math.floor(pad * 0.5);
-
-    imtext.SetConfig('Tahoma', false, 1);
-
-    local rows = {};
-    local function addRow(lbl, val) rows[#rows+1] = {'row', lbl, val}; end
-    local function addSep()         rows[#rows+1] = {'sep', '', ''}; end
-    local function addHeader(txt)   rows[#rows+1] = {'header', txt, ''}; end
-
-    if showFenrir then
-        local lc = data.LUNAR_CRY[phaseIdx];
-        local eh = data.ECLIPTIC_HOWL[phaseIdx];
-        local eg = data.ECLIPTIC_GROWL[phaseIdx];
-        if lc and eh and eg then
-            addHeader('Fenrir Pacts');
-            addRow('Lunar Cry',      string.format('Acc %+d   Eva %+d', lc[1], lc[2]));
-            addRow('Ecliptic Howl',  string.format('Acc %+d   Eva %+d', eh[1], eh[2]));
-            addRow('Ecliptic Growl', string.format('STR/DEX/VIT %+d   AGI/INT/MND/CHR %+d', eg[1], eg[2]));
-        end
-    end
-
-    if showSelene then
-        local sb = data.SELENE_BOW[phaseIdx];
-        if sb then
-            if showFenrir then addSep(); end
-            addHeader("Selene's Bow");
-            addRow('Rng Acc / Atk', string.format('%+d RAcc   %+d RAtk', sb[1], sb[2]));
-        end
-    end
-
-    local labelColW = 0;
-    local valueColW = 0;
-    for _, r in ipairs(rows) do
-        if r[1] == 'row' then
-            local lw = imtext.Measure(r[2], fontSize);
-            local vw = imtext.Measure(r[3], fontSize);
-            if lw > labelColW then labelColW = lw; end
-            if vw > valueColW then valueColW = vw; end
-        end
-    end
-    labelColW = labelColW + colGap;
-
-    local dayHeaderStr    = dayName;
-    local phaseHeaderStr  = phaseName .. '  (' .. moonPercent .. '%)';
-    local dayHeaderW      = imtext.Measure(dayHeaderStr, fontSize);
-    local phaseHeaderW    = imtext.Measure(phaseHeaderStr, fontSize);
-    local headerW         = math.max(dayHeaderW, phaseHeaderW);
-
-    local maxSecW = 0;
-    for _, r in ipairs(rows) do
-        if r[1] == 'header' then
-            local hw = imtext.Measure(r[2], fontSize);
-            if hw > maxSecW then maxSecW = hw; end
-        end
-    end
-
-    local separatorH = math.floor(pad * 0.75);
-    local contentW   = math.max(headerW, maxSecW, labelColW + valueColW);
-    local boxW       = contentW + pad * 2;
-
-    local boxH = pad + lineSpacing + lineSpacing + separatorH;
-    for i, r in ipairs(rows) do
-        if r[1] == 'row' then
-            boxH = boxH + lineSpacing;
-        elseif r[1] == 'header' then
-            boxH = boxH + lineSpacing;
-        elseif r[1] == 'sep' then
-            boxH = boxH + sectionGap * 2 + 1;
-        end
-    end
-    boxH = boxH + pad;
-
     local direction = (gConfig and gConfig.vanaTimeTooltipDirection) or 'above';
-    local ox = mainWinPos.x + math.floor((mainWinSize.w - boxW) / 2);
-    local oy;
-    if direction == 'below' then
-        oy = mainWinPos.y + mainWinSize.h + 4;
-    else
-        oy = mainWinPos.y - boxH - 4;
-    end
+    local anchorX   = mainWinPos.x + mainWinSize.w * 0.5;
+    local anchorY   = (direction == 'below')
+        and (mainWinPos.y + mainWinSize.h + 4)
+        or  (mainWinPos.y - 4);
+    local pivotY    = (direction == 'below') and 0.0 or 1.0;
 
-    local bgCol     = imgui.GetColorU32({0.06, 0.06, 0.07, 0.92});
-    local borderCol = imgui.GetColorU32({0.45, 0.45, 0.45, 1.0});
-    DLRectFilled(dl, ox, oy, ox + boxW, oy + boxH, bgCol, 4);
-    DLRect(dl, ox, oy, ox + boxW, oy + boxH, borderCol, 4, nil, 1.0);
+    imgui.SetNextWindowBgAlpha(0.92);
+    imgui.SetNextWindowPos({anchorX, anchorY}, ImGuiCond_Always, {0.5, pivotY});
+    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0);
+    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 8});
 
-    local curY = oy + pad;
-    imtext.Draw(dl, dayHeaderStr, ox + pad, curY, 0xFFF4DA97, fontSize);
-    curY = curY + lineSpacing;
-    imtext.Draw(dl, phaseHeaderStr, ox + pad, curY, 0xFFFFFFFF, fontSize);
-    curY = curY + lineSpacing;
+    local began = imgui.Begin("##VanaDialDayTip", true, TIP_WIN_FLAGS);
+    if began then
+        imgui.TextColored(COL_TIP_GOLD, dayName);
+        imgui.Text(string.format('%s  (%d%%)', phaseName, moonPercent));
 
-    local sepLineY = curY + math.floor(separatorH / 2);
-    DLLine(dl, ox + pad, sepLineY, ox + boxW - pad, sepLineY,
-        imgui.GetColorU32({0.35, 0.35, 0.35, 1.0}), 1.0);
-    curY = curY + separatorH;
+        if showFenrir then
+            local lc = data.LUNAR_CRY[phaseIdx];
+            local eh = data.ECLIPTIC_HOWL[phaseIdx];
+            local eg = data.ECLIPTIC_GROWL[phaseIdx];
+            if lc and eh and eg then
+                imgui.Separator();
+                imgui.TextColored(COL_TIP_HEADER, 'Fenrir Pacts');
+                imgui.TextColored(COL_TIP_LABEL, 'Lunar Cry');
+                imgui.SameLine(0, 8);
+                imgui.Text(string.format('Acc %+d   Eva %+d', lc[1], lc[2]));
+                imgui.TextColored(COL_TIP_LABEL, 'Ecliptic Howl');
+                imgui.SameLine(0, 8);
+                imgui.Text(string.format('Acc %+d   Eva %+d', eh[1], eh[2]));
+                imgui.TextColored(COL_TIP_LABEL, 'Ecliptic Growl');
+                imgui.SameLine(0, 8);
+                imgui.Text(string.format('STR/DEX/VIT %+d   AGI/INT/MND/CHR %+d', eg[1], eg[2]));
+            end
+        end
 
-    local sepLineCol = imgui.GetColorU32({0.28, 0.28, 0.28, 1.0});
-    for _, r in ipairs(rows) do
-        local kind, a, b = r[1], r[2], r[3];
-        if kind == 'header' then
-            imtext.Draw(dl, a, ox + pad, curY, 0xFFCBAA50, fontSize);
-            curY = curY + lineSpacing;
-        elseif kind == 'row' then
-            imtext.Draw(dl, a, ox + pad,             curY, 0xFFAAAAAA, fontSize);
-            imtext.Draw(dl, b, ox + pad + labelColW, curY, 0xFFFFFFFF, fontSize);
-            curY = curY + lineSpacing;
-        elseif kind == 'sep' then
-            curY = curY + sectionGap;
-            DLLine(dl, ox + pad, curY, ox + boxW - pad, curY, sepLineCol, 1.0);
-            curY = curY + sectionGap + 1;
+        if showSelene then
+            local sb = data.SELENE_BOW[phaseIdx];
+            if sb then
+                if showFenrir then imgui.Separator(); end
+                imgui.TextColored(COL_TIP_HEADER, "Selene's Bow");
+                imgui.TextColored(COL_TIP_LABEL, 'Rng Acc / Atk');
+                imgui.SameLine(0, 8);
+                imgui.Text(string.format('%+d RAcc   %+d RAtk', sb[1], sb[2]));
+            end
         end
     end
+    if began then imgui.End(); end
+    imgui.PopStyleVar(2);
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
@@ -990,10 +973,14 @@ function M.DrawWindow(weatherId)
     if began then imgui.End(); end
     imgui.PopStyleVar(2);
     if not ok then
-        error(err, 2);
+        print("[Vana'Dial] Draw error: " .. tostring(err));
+        return;
     end
 
-    FlushDayColumnTooltip();
+    local tipOk, tipErr = pcall(DrawDayColumnTooltipWindow);
+    if not tipOk then
+        print("[Vana'Dial] Tooltip error: " .. tostring(tipErr));
+    end
 
     -- ── Popup stacking offsets ────────────────────────────────────────────────
     local todEnabled    = cfg.vanaTimeTodPopup == true;
@@ -1003,12 +990,7 @@ function M.DrawWindow(weatherId)
     if cfg.vanaTimeShowWeather ~= false and cfg.vanaTimeWeatherHideNonElemental then
         if os.clock() < (_G.XIUI_weatherTestExpiry or 0) then
             weatherTestId    = 4;  -- Hot Spell / Fire (first elemental in HorizonXI ordering)
-            local now = os.clock();
-            if now - moonPulseAt >= 0.125 then
-                moonPulseAt  = now;
-                moonPulseVal = math.floor((math.sin(now * 3) + 1.0) * 8 + 0.5) / 8;
-            end
-            weatherTestAlpha = 0.35 + 0.65 * moonPulseVal;
+            weatherTestAlpha = 0.35 + 0.65 * GetMoonPulse();
         end
     else
         _G.XIUI_weatherTestExpiry = 0;
