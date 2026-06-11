@@ -556,6 +556,43 @@ function M.Cleanup()
     popups.SetTimersOpen(false);
 end
 
+function M.HideMainWindow()
+    -- Park off-screen first; never move the visible window to (0,0) during transitions.
+    imgui.SetNextWindowPos({-10000, -10000}, ImGuiCond_Always);
+    imgui.SetNextWindowSize({1, 1}, ImGuiCond_Always);
+    local flags = bit.bor(
+        GetBaseWindowFlags(true),
+        ImGuiWindowFlags_NoInputs,
+        ImGuiWindowFlags_NoBackground
+    );
+    if imgui.Begin("Vana'Dial##standalone", true, flags) then
+        imgui.End();
+    end
+end
+
+function M.StageMainWindowPosition()
+    local cfg = gConfig;
+    if not cfg then return false; end
+    if not cfg.windowPositions then cfg.windowPositions = T{}; end
+    if not cfg.windowPositions['VanaDial'] then
+        cfg.windowPositions['VanaDial'] = T{ x = 100, y = 100 };
+    end
+    local pos = cfg.windowPositions['VanaDial'];
+    imgui.SetNextWindowPos({pos.x, pos.y}, ImGuiCond_Always);
+    imgui.SetNextWindowSize({1, 1}, ImGuiCond_Always);
+    local flags = bit.bor(
+        GetBaseWindowFlags(true),
+        ImGuiWindowFlags_NoInputs,
+        ImGuiWindowFlags_NoBackground
+    );
+    if imgui.Begin("Vana'Dial##standalone", true, flags) then
+        imgui.End();
+    end
+    if not cfg.appliedPositions then cfg.appliedPositions = T{}; end
+    cfg.appliedPositions['VanaDial'] = true;
+    return true;
+end
+
 -- ── DrawWindow ────────────────────────────────────────────────────────────────
 
 function M.DrawWindow(weatherId)

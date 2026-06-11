@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.24';
+addon.version = '1.4.25';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -199,11 +199,15 @@ local function GetSettingsCharKey()
     return ok and key or nil;
 end
 
+local _positionReady = false;
+
 local function OnCharacterSettingsReady(s)
     if s == nil then return; end
 
+    local switching = gConfig ~= nil and gConfig ~= s;
+
     -- Flush the outgoing character's pending position before switching tables.
-    if gConfig and gConfig ~= s and _settingsDirty then
+    if switching and _settingsDirty then
         SaveVanaDialSettings();
         _settingsDirty = false;
     end
@@ -216,7 +220,8 @@ local function OnCharacterSettingsReady(s)
     MigrateWindowSettings();
     gConfig.appliedPositions = T{};
     _allowPositionSave = false;
-    EnsureDefaultWindowPosition(true);
+    -- Do not touch window position here; it is applied on world entry after login/zone-in.
+    _positionReady = false;
 
     local key = GetSettingsCharKey();
     if key then _activeCharKey = key; end
@@ -234,7 +239,6 @@ settings.register('settings', 'vd_char_settings', function(s)
 end);
 
 MigrateWindowSettings();
-EnsureDefaultWindowPosition(false);
 
 -- ── Config window state ───────────────────────────────────────────────────────
 local _configOpen = false;
@@ -313,6 +317,8 @@ local TextureManager  = require('libs.texturemanager');
 -- ── Module state ──────────────────────────────────────────────────────────────
 local hidden             = false;
 local weatherId          = 0;
+local _wasInWorldDraw    = false;
+local _inWorldReady          = false;
 
 -- ── In-world gate (zonename / minimap pattern) ────────────────────────────────
 -- Do not draw on the title screen, character select, or while zoning.
@@ -359,14 +365,18 @@ local function IsPlayerInWorld()
     return ok and ready;
 end
 
+IsPlayerZoningNow = function()
+    local ok, zoning = pcall(function()
+        local player = AshitaCore:GetMemoryManager():GetPlayer();
+        if not player then return false; end
+        return IsPlayerZoning(player);
+    end);
+    return ok and zoning;
+end
+
 local function BeginZoning()
     _allowPositionSave = false;
-    if gConfig then
-        gConfig.appliedPositions = T{};
-    end
-    _presentTick   = -1;
-    _menuChatTick  = -1;
-    _inWorldTick   = -1;
+    _positionReady = false;
 end
 local pendingWeatherRead = false;
 local pendingWeatherTime = 0;
@@ -526,11 +536,14 @@ local function RefreshPresentCache()
 
     if hidden or gConfig.showVanaDial == false then
         _presentInWorld = false;
+        _inWorldReady   = false;
         _inWorldTick    = t;
     elseif _inWorldTick < 0 or (t - _inWorldTick) >= IN_WORLD_INTERVAL then
-        _inWorldTick    = t;
-        _presentInWorld = IsPlayerInWorld();
-        if _presentInWorld then
+        _inWorldTick  = t;
+        local ready   = IsPlayerInWorld();
+        _inWorldReady = ready;
+        _presentInWorld = ready;
+        if ready and not IsPlayerZoningNow() then
             ReloadCharacterSettingsIfNeeded();
         end
     end
@@ -553,7 +566,17 @@ end
 local function ShouldDrawMain()
     if hidden then return false; end
     if gConfig.showVanaDial == false then return false; end
-    return _presentInWorld;
+    if not _positionReady then return false; end
+    if IsPlayerZoningNow() then return false; end
+    if not _presentInWorld then return false; end
+    if not GetSettingsCharKey() then return false; end
+    return true;
+end
+
+local function ShouldHideMainWindow()
+    if hidden then return false; end
+    if gConfig.showVanaDial == false then return false; end
+    return true;
 end
 
 -- ── Events ────────────────────────────────────────────────────────────────────
@@ -567,6 +590,10 @@ ashita.events.register('load', 'vd_load', function()
     display.Initialize();
     local w = ReadWeatherFromMemory();
     if w ~= nil then weatherId = w; end
+    _positionReady = false;
+    _wasInWorldDraw = false;
+    _presentTick = -1;
+    _inWorldTick = -1;
 end);
 
 ashita.events.register('text_in', 'vd_welcome', function(e)
@@ -591,25 +618,40 @@ ashita.events.register('unload', 'vd_unload', function()
 end);
 
 ashita.events.register('d3d_present', 'vd_present', function()
+    RefreshPresentCache();
+
+    local inWorldDraw = _presentInWorld and not IsPlayerZoningNow() and GetSettingsCharKey() ~= nil;
+
+    -- Apply the logged-in character's saved position once when entering the world.
+    if inWorldDraw and not _wasInWorldDraw then
+        EnsureDefaultWindowPosition(false);
+        if gConfig then gConfig.appliedPositions = T{}; end
+        _positionReady = true;
+    elseif not inWorldDraw then
+        _positionReady = false;
+    end
+    _wasInWorldDraw = inWorldDraw;
+
+    if inWorldDraw then
+        _allowPositionSave = true;
+    else
+        _allowPositionSave = false;
+    end
+
+    if not ShouldDrawMain() and ShouldHideMainWindow() then
+        display.HideMainWindow();
+    end
+
     TextureManager.FlushPendingReleases();
     -- One download step per frame so /vd update still progresses without packet traffic.
     updater.TickUpdate();
     updater.TickLoginCheck();
 
-    RefreshPresentCache();
-
-    if _presentInWorld then
-        _allowPositionSave = true;
-    end
-
     if ShouldDrawMain() then
-        -- Hide the clock + popups while a game menu or expanded chat log is open.
-        -- The config window (below) is intentionally NOT gated so it stays usable.
         local menuHidden = _presentMenuOpen;
         local chatHidden = _presentChatOpen;
 
         if not menuHidden and not chatHidden then
-            -- Deferred weather re-read after zone-in.
             if pendingWeatherRead and os.time() >= pendingWeatherTime then
                 pendingWeatherRead = false;
                 local w = ReadWeatherFromMemory();
@@ -622,6 +664,8 @@ ashita.events.register('d3d_present', 'vd_present', function()
             if not ok then
                 VanaDialPrint('Draw error: ' .. tostring(err));
             end
+        elseif ShouldHideMainWindow() then
+            display.HideMainWindow();
         end
     end
 
