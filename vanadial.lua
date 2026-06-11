@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.3.6';
+addon.version = '1.3.8';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -182,25 +182,52 @@ local function EnsureDefaultWindowPosition(persist)
     end
 end
 
+local _activeCharKey = nil;
+
+local function GetSettingsCharKey()
+    local ok, key = pcall(function()
+        local party = AshitaCore:GetMemoryManager():GetParty();
+        if not party then return nil; end
+        local name = party:GetMemberName(0);
+        if not name or name == '' then return nil; end
+        local id = party:GetMemberServerId(0);
+        if id == nil or id == 0 then return nil; end
+        return string.format('%s_%u', name, id);
+    end);
+    return ok and key or nil;
+end
+
 local function OnCharacterSettingsReady(s)
-    if s ~= nil then
-        s.appliedPositions = nil;
-        gConfig = s;
+    if s == nil then return; end
+
+    -- Flush the outgoing character's pending position before switching tables.
+    if gConfig and gConfig ~= s and _settingsDirty then
+        SaveVanaDialSettings();
+        _settingsDirty = false;
     end
+
+    s.appliedPositions = nil;
+    gConfig = s;
+
     InvalidateColorCaches();
     imtext.Reset();
     MigrateWindowSettings();
-    if not gConfig.appliedPositions then
-        gConfig.appliedPositions = T{};
-    else
-        gConfig.appliedPositions[WINDOW_KEY] = nil;
-    end
+    gConfig.appliedPositions = T{};
+    _allowPositionSave = false;
     EnsureDefaultWindowPosition(true);
+
+    local key = GetSettingsCharKey();
+    if key then _activeCharKey = key; end
 end
 
--- Reload per-character settings once the character folder is known (Anglin pattern).
+local function ReloadCharacterSettingsIfNeeded()
+    local key = GetSettingsCharKey();
+    if not key or key == _activeCharKey then return; end
+    OnCharacterSettingsReady(settings.load(defaults));
+end
+
+-- Fires whenever Ashita loads/switches the per-character settings table.
 settings.register('settings', 'vd_char_settings', function(s)
-    settings.unregister('settings', 'vd_char_settings');
     OnCharacterSettingsReady(s);
 end);
 
@@ -332,8 +359,9 @@ end
 
 local function BeginZoning()
     _allowPositionSave = false;
-    if not gConfig.appliedPositions then gConfig.appliedPositions = T{}; end
-    gConfig.appliedPositions[WINDOW_KEY] = nil;
+    if gConfig then
+        gConfig.appliedPositions = T{};
+    end
     _presentTick   = -1;
     _menuChatTick  = -1;
     _inWorldTick   = -1;
@@ -500,6 +528,9 @@ local function RefreshPresentCache()
     elseif _inWorldTick < 0 or (t - _inWorldTick) >= IN_WORLD_INTERVAL then
         _inWorldTick    = t;
         _presentInWorld = IsPlayerInWorld();
+        if _presentInWorld then
+            ReloadCharacterSettingsIfNeeded();
+        end
     end
 
     local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
@@ -534,7 +565,14 @@ ashita.events.register('load', 'vd_load', function()
     display.Initialize();
     local w = ReadWeatherFromMemory();
     if w ~= nil then weatherId = w; end
-    updater.ScheduleLoginCheck(15);
+end);
+
+ashita.events.register('text_in', 'vd_welcome', function(e)
+    if e.injected or e.blocked then return; end
+    local msg = e.message or '';
+    if msg:find('<<< Welcome to', 1, true) then
+        updater.OnWelcomeChat();
+    end
 end);
 
 ashita.events.register('unload', 'vd_unload', function()
@@ -553,6 +591,7 @@ ashita.events.register('d3d_present', 'vd_present', function()
     TextureManager.FlushPendingReleases();
     -- One download step per frame so /vd update still progresses without packet traffic.
     updater.TickUpdate();
+    updater.TickLoginCheck();
 
     RefreshPresentCache();
 

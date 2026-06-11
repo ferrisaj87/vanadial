@@ -13,8 +13,10 @@ local RAW_BASE = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/main/';
 
 local UPDATE_VERSION_URL = RAW_BASE .. 'vanadial.lua';
 
--- Seconds after load before the login update notice (avoid login chat spam).
-local LOGIN_CHECK_DELAY_SEC = 15;
+-- Login update check runs once after the HorizonXI welcome line in chat (see vanadial.lua text_in).
+
+local MSG_UP_TO_DATE  = "Vana'Dial is up to date!";
+local MSG_UPDATE_AVAIL = "A new version of Vana'Dial is available! /vd update to get the latest version!";
 
 -- All runtime Lua files shipped with the addon (relative to addons/vanadial/).
 local UPDATE_RELATIVE = {
@@ -33,9 +35,9 @@ local UPDATE_RELATIVE = {
     'libs/updater.lua',
 };
 
-local _version            = '0.0.0';
-local _loginCheckAt        = nil;
+local _version             = '0.0.0';
 local _loginCheckDone      = false;
+local _loginCheckPending   = false;
 
 -- Incremental download state (one HTTPS fetch per packet_in tick).
 local _updateJob = nil;
@@ -127,28 +129,30 @@ function M.GetVersion()
     return _version;
 end
 
-function M.ScheduleLoginCheck(delaySec)
-    _loginCheckAt   = os.clock() + (delaySec or LOGIN_CHECK_DELAY_SEC);
-    _loginCheckDone = false;
+local function NotifyVersionStatus(remote)
+    if remote and remote ~= '' and _version and _version ~= ''
+        and VersionGreater(remote, _version) then
+        PrintMsg(MSG_UPDATE_AVAIL);
+    else
+        PrintMsg(MSG_UP_TO_DATE);
+    end
+end
+
+function M.OnWelcomeChat()
+    _loginCheckDone    = false;
+    _loginCheckPending = true;
 end
 
 function M.TickLoginCheck()
-    if _loginCheckDone or not _loginCheckAt or os.clock() < _loginCheckAt then
+    if _loginCheckDone or not _loginCheckPending then
         return;
     end
-    _loginCheckDone = true;
-    _loginCheckAt = nil;
+    _loginCheckDone    = true;
+    _loginCheckPending = false;
 
-    local ok = pcall(function()
-        local remote = FetchRemoteVersion();
-        if remote and remote ~= '' and _version and _version ~= ''
-            and VersionGreater(remote, _version) then
-            PrintMsg('There is an update available.');
-        end
+    pcall(function()
+        NotifyVersionStatus(FetchRemoteVersion());
     end);
-    if not ok then
-        -- Silent on login; user can run /vd checkupdate manually.
-    end
 end
 
 function M.CheckAndNotify(manual)
@@ -161,10 +165,8 @@ function M.CheckAndNotify(manual)
         return;
     end
 
-    if VersionGreater(remote, _version) then
-        PrintMsg('There is an update available.');
-    elseif manual then
-        PrintMsg('Already up to date.');
+    if manual then
+        NotifyVersionStatus(remote);
     end
 end
 
@@ -217,7 +219,7 @@ function M.TickUpdate()
         if not VersionGreater(remote, _version) then
             _updateJob = nil;
             _updateTickAt = -1;
-            PrintMsg('Already up to date.');
+            PrintMsg(MSG_UP_TO_DATE);
             return;
         end
 
