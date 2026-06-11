@@ -117,6 +117,31 @@ local function FetchRemoteVersion()
     return ParseVersionFromBody(body), 200;
 end
 
+local _vanadialPath = nil;
+
+local function GetVanadialPath()
+    if not _vanadialPath then
+        local root = AshitaCore:GetInstallPath() or '';
+        _vanadialPath = (root .. 'addons\\vanadial\\vanadial.lua'):gsub('[\\/]+', '\\');
+    end
+    return _vanadialPath;
+end
+
+-- Compare against the version in vanadial.lua on disk, not only the in-memory
+-- value from addon load (so /vd update after a download does not re-fetch).
+local function GetLocalVersionForUpdate()
+    local f = io.open(GetVanadialPath(), 'rb');
+    if f then
+        local body = f:read('*a');
+        f:close();
+        local diskVer = ParseVersionFromBody(body);
+        if diskVer and diskVer ~= '' then
+            return diskVer;
+        end
+    end
+    return _version;
+end
+
 -- ── Public API ────────────────────────────────────────────────────────────────
 
 function M.Init(version)
@@ -128,16 +153,17 @@ function M.GetVersion()
 end
 
 local function NotifyVersionStatus(remote)
+    local localVer = GetLocalVersionForUpdate();
     if not remote or remote == '' then
-        PrintMsg(string.format("Vana'Dial v%s — could not check GitHub for updates.", _version or '?'));
+        PrintMsg(string.format("Vana'Dial v%s — could not check GitHub for updates.", localVer or '?'));
         return;
     end
-    if _version and _version ~= '' and VersionGreater(remote, _version) then
+    if localVer and localVer ~= '' and VersionGreater(remote, localVer) then
         PrintMsg(string.format(
             "A new version of Vana'Dial is available (v%s)! /vd update to get the latest version!",
             remote));
     else
-        PrintMsg(string.format("Vana'Dial v%s is up to date!", _version or '?'));
+        PrintMsg(string.format("Vana'Dial v%s is up to date!", localVer or '?'));
     end
 end
 
@@ -188,8 +214,28 @@ function M.RunUpdate()
         PrintMsg('Update already in progress.');
         return;
     end
-    _updateJob = { phase = 'check' };
     PrintMsg('Checking for updates...');
+
+    local remote = FetchRemoteVersion();
+    if not remote then
+        PrintMsg('Could not check for updates. Try again later.');
+        return;
+    end
+
+    local localVer = GetLocalVersionForUpdate();
+    if not VersionGreater(remote, localVer) then
+        PrintMsg(string.format("Vana'Dial v%s is up to date!", localVer or '?'));
+        return;
+    end
+
+    _updateJob = {
+        phase  = 'download',
+        index  = 1,
+        total  = #UPDATE_FILES,
+        remote = remote,
+    };
+    _updateTickAt = -1;
+    PrintMsg("Updating Vana'Dial....");
 end
 
 local function FinishUpdateJob(success)
@@ -211,34 +257,6 @@ function M.TickUpdate()
     _updateTickAt = now;
 
     local job = _updateJob;
-
-    if job.phase == 'check' then
-        local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
-        if not ok or code ~= 200 or not body then
-            FinishUpdateJob(false);
-            return;
-        end
-
-        local remote = ParseVersionFromBody(body);
-        if not remote then
-            FinishUpdateJob(false);
-            return;
-        end
-
-        if not VersionGreater(remote, _version) then
-            _updateJob = nil;
-            _updateTickAt = -1;
-            PrintMsg(string.format("Vana'Dial v%s is up to date!", _version or '?'));
-            return;
-        end
-
-        job.phase  = 'download';
-        job.index  = 1;
-        job.total  = #UPDATE_FILES;
-        job.remote = remote;
-        PrintMsg("Updating Vana'Dial....");
-        return;
-    end
 
     if job.phase == 'download' then
         local i = job.index;
