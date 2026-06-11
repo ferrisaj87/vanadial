@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.25';
+addon.version = '1.4.26';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -200,6 +200,7 @@ local function GetSettingsCharKey()
 end
 
 local _positionReady = false;
+local RearmPositionIfInWorld;
 
 local function OnCharacterSettingsReady(s)
     if s == nil then return; end
@@ -220,17 +221,20 @@ local function OnCharacterSettingsReady(s)
     MigrateWindowSettings();
     gConfig.appliedPositions = T{};
     _allowPositionSave = false;
-    -- Do not touch window position here; it is applied on world entry after login/zone-in.
-    _positionReady = false;
 
     local key = GetSettingsCharKey();
     if key then _activeCharKey = key; end
+
+    if switching then
+        _positionReady = false;
+    end
 end
 
 local function ReloadCharacterSettingsIfNeeded()
     local key = GetSettingsCharKey();
     if not key or key == _activeCharKey then return; end
     OnCharacterSettingsReady(settings.load(defaults));
+    RearmPositionIfInWorld();
 end
 
 -- Fires whenever Ashita loads/switches the per-character settings table.
@@ -335,9 +339,7 @@ local _presentTick      = -1;
 local _presentInWorld   = false;
 local _presentMenuOpen  = false;
 local _presentChatOpen  = false;
-local _menuChatTick      = -1;
 local _inWorldTick       = -1;
-local MENU_CHAT_INTERVAL = 0.12; -- menu/chat memory reads
 local IN_WORLD_INTERVAL  = 0.15; -- party/entity probe; zone-in lags slightly at most this long
 
 local function IsPlayerInWorld()
@@ -372,6 +374,13 @@ IsPlayerZoningNow = function()
         return IsPlayerZoning(player);
     end);
     return ok and zoning;
+end
+
+RearmPositionIfInWorld = function()
+    if not IsPlayerInWorld() or IsPlayerZoningNow() or not GetSettingsCharKey() then return; end
+    EnsureDefaultWindowPosition(false);
+    if gConfig then gConfig.appliedPositions = T{}; end
+    _positionReady = true;
 end
 
 local function BeginZoning()
@@ -550,16 +559,15 @@ local function RefreshPresentCache()
 
     local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
     local needChat = gConfig.vanaTimeHideOnChatExpanded == true;
-    if needMenu or needChat then
-        if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL then
-            _menuChatTick = t;
-            _presentMenuOpen = needMenu and IsGameMenuOpen() or false;
-            _presentChatOpen = needChat and IsChatExpanded() or false;
-        end
+    if needMenu then
+        _presentMenuOpen = IsGameMenuOpen();
     else
         _presentMenuOpen = false;
+    end
+    if needChat then
+        _presentChatOpen = IsChatExpanded();
+    else
         _presentChatOpen = false;
-        _menuChatTick    = t;
     end
 end
 
@@ -594,6 +602,7 @@ ashita.events.register('load', 'vd_load', function()
     _wasInWorldDraw = false;
     _presentTick = -1;
     _inWorldTick = -1;
+    RearmPositionIfInWorld();
 end);
 
 ashita.events.register('text_in', 'vd_welcome', function(e)
@@ -745,6 +754,12 @@ ashita.events.register('command', 'vd_command', function(e)
     elseif sub == 'lunar' or sub == 'vtlunar' then
         hidden = false;
         popups.OpenTimersSection('vdlunar');
+
+    elseif sub == 'show' then
+        hidden = false;
+        _wasInWorldDraw = false;
+        RearmPositionIfInWorld();
+        VanaDialPrint("Vana'Dial visibility reset.");
 
     elseif sub == 'reset' then
         if not gConfig.windowPositions then gConfig.windowPositions = T{}; end

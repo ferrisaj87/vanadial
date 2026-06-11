@@ -568,6 +568,10 @@ function M.HideMainWindow()
     if imgui.Begin("Vana'Dial##standalone", true, flags) then
         imgui.End();
     end
+    -- Force saved position to be re-applied on next draw (HideMainWindow moves ImGui off-screen).
+    if gConfig and gConfig.appliedPositions then
+        gConfig.appliedPositions['VanaDial'] = nil;
+    end
 end
 
 function M.StageMainWindowPosition()

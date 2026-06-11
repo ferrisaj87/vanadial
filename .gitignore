@@ -3,3 +3,7 @@ Desktop.ini
 .DS_Store
 *.swp
 *.swo
+
+# Local-only docs and Cursor rules (not for GitHub)
+.local/
+.cursor/
