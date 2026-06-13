@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.26';
+addon.version = '1.4.27';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -339,7 +339,9 @@ local _presentTick      = -1;
 local _presentInWorld   = false;
 local _presentMenuOpen  = false;
 local _presentChatOpen  = false;
+local _menuChatTick      = -1;
 local _inWorldTick       = -1;
+local MENU_CHAT_INTERVAL = 0.12; -- menu name chain is heavier than chat-expanded byte read
 local IN_WORLD_INTERVAL  = 0.15; -- party/entity probe; zone-in lags slightly at most this long
 
 local function IsPlayerInWorld()
@@ -560,7 +562,10 @@ local function RefreshPresentCache()
     local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
     local needChat = gConfig.vanaTimeHideOnChatExpanded == true;
     if needMenu then
-        _presentMenuOpen = IsGameMenuOpen();
+        if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL then
+            _menuChatTick = t;
+            _presentMenuOpen = IsGameMenuOpen();
+        end
     else
         _presentMenuOpen = false;
     end

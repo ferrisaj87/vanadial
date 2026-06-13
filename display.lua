@@ -149,6 +149,9 @@ local function LerpArgbHsv(c1, c2, t)
     local s = s1 + (s2 - s1) * t;
     local v = v1 + (v2 - v1) * t;
     local r, g, b = colorLib.hsvToRgb(h, s, v);
+    r = math.floor(r * 255 + 0.5);
+    g = math.floor(g * 255 + 0.5);
+    b = math.floor(b * 255 + 0.5);
     local a = math.floor(a1 + (a2 - a1) * t + 0.5);
     return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b);
 end
@@ -162,6 +165,7 @@ end
 local _textPos        = {0, 0};
 local _moonPctMeasW   = 0;
 local _moonPctFontSz  = -1;
+local _mainWindowParked = false;
 
 -- Reusable scratch tables for drawlist calls. ImGui consumes the point tables
 -- synchronously within each call, so sharing two scratch points (plus constant
@@ -532,6 +536,7 @@ function M.Reset()
     ltCache    = { osMin=-1, osHour=-1, str='', measW=0 };
     lastOsTime  = -1;
     lastFontSize = -1;
+    _mainWindowParked = false;
     windowbg.ClearTintCache();
     imtext.Reset();
 end
@@ -541,6 +546,7 @@ function M.Cleanup()
     TextureManager.clear();
     windowbg.ClearTintCache();
     imtext.Reset();
+    _mainWindowParked = false;
     -- Clear shared texture tables in place so popups' context keeps referencing
     -- the same tables (a fresh {} would orphan popups._ctx and the old textures).
     for k in pairs(textures)          do textures[k]          = nil; end
@@ -568,9 +574,12 @@ function M.HideMainWindow()
     if imgui.Begin("Vana'Dial##standalone", true, flags) then
         imgui.End();
     end
-    -- Force saved position to be re-applied on next draw (HideMainWindow moves ImGui off-screen).
-    if gConfig and gConfig.appliedPositions then
-        gConfig.appliedPositions['VanaDial'] = nil;
+    -- Clear once per hide stretch so the next draw re-applies saved position.
+    if not _mainWindowParked then
+        _mainWindowParked = true;
+        if gConfig and gConfig.appliedPositions then
+            gConfig.appliedPositions['VanaDial'] = nil;
+        end
     end
 end
 
@@ -603,6 +612,7 @@ function M.DrawWindow(weatherId)
     local cfg = gConfig;
     if not cfg then return; end
 
+    _mainWindowParked = false;
     pendingDayTooltip = nil;
 
     -- Draw after other modules may have called imtext.SetConfigFromSettings

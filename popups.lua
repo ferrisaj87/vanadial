@@ -142,6 +142,7 @@ local cachedWeatherH = 0;
 local cachedWeatherW = 0;
 local cachedTodH     = 0;
 local cachedTodW     = 0;
+local todTimerMeas   = { str = '', size = 0, w = 0, h = 0 };
 
 -- Wall-clock smoothed TOD countdown display.
 local todDisplaySecs = nil;
@@ -783,7 +784,12 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
             local clockBold = cfg.vanaTimeFontBold ~= false;
             imtext.SetConfig('Tahoma', clockBold, 1);
             local timerFontSize = math.max(8, math.floor(12 * iconSize / 28 + 0.5));
-            local tw, th = imtext.Measure(timerStr, timerFontSize);
+            if timerStr ~= todTimerMeas.str or timerFontSize ~= todTimerMeas.size then
+                todTimerMeas.str  = timerStr;
+                todTimerMeas.size = timerFontSize;
+                todTimerMeas.w, todTimerMeas.h = imtext.Measure(timerStr, timerFontSize);
+            end
+            local tw, th = todTimerMeas.w, todTimerMeas.h;
             local textOffX = math.max(0, math.floor((contentW - tw) / 2));
             local tx, ty = imgui.GetCursorScreenPos();
             local timerArgb = colorCfg.todTimerColor or 0xFFFFFFFF;
