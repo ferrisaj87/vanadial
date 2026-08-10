@@ -1092,12 +1092,17 @@ function M.DrawWindow(weatherId)
     else
         weatherBaseSize = iconSize;
     end
+    local effectiveWeatherId = weatherTestId or weatherId;
+    local useElementalSize = cfg.vanaTimeWeatherAdjustElemental == true
+        or cfg.vanaTimeWeatherHideNonElemental == true;
     local weatherIconSize = weatherBaseSize;
-    if cfg.vanaTimeWeatherAdjustElemental then
-        local isElemental   = weatherEnabled and weatherId >= 4;
-        local previewActive = _G.XIUI_weatherElementalPreview == true;
+    if useElementalSize then
+        local isElemental   = weatherEnabled and effectiveWeatherId >= 4;
+        local previewElem   = _G.XIUI_weatherElementalPreview == true;
         local previewBase   = _G.XIUI_weatherBasePreview == true;
-        if not previewBase and (isElemental or previewActive) then
+        if previewBase then
+            weatherIconSize = weatherBaseSize;
+        elseif isElemental or previewElem then
             if cfg.vanaTimeWeatherCustomScale then
                 weatherIconSize = math.floor(math.max(16, math.min(64, cfg.vanaTimeWeatherElementalIconSize or 42)) * scale);
             else

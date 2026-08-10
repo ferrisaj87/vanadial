@@ -12,6 +12,7 @@
 *   - ImGuiCol_Tab* constants renamed (TabActive -> TabSelected, etc.)
 *   - ImDrawCornerFlags renamed to ImDrawFlags_RoundCorners*
 *   - BeginDisabled/EndDisabled: exists in 4.3 (ImGui 1.85+), polyfilled for main
+*   - SetWindowFontScale: removed in ImGui 1.92 (Ashita 3.0), polyfilled via PushFont
 ]]--
 
 local imgui = require('imgui');
@@ -127,6 +128,41 @@ else
     -- PushStyleColor wrapper removed - all constants now guaranteed to exist via fallbacks above
     -- This ensures push/pop counts always match
 
+end
+
+-- SetWindowFontScale was removed in ImGui 1.92 (Ashita 3.0).
+-- Emulate per-window font scale via PushFont(font, FontSizeBase * scale).
+if imgui.SetWindowFontScale == nil then
+    local fontScalePushDepth = 0;
+
+    local function GetFontSizeBase()
+        local style = imgui.GetStyle();
+        if style and style.FontSizeBase and style.FontSizeBase > 0 then
+            return style.FontSizeBase;
+        end
+        local sz = imgui.GetFontSize();
+        if sz and sz > 1 then
+            return sz;
+        end
+        return 13;
+    end
+
+    imgui.SetWindowFontScale = function(scale)
+        if not scale or scale <= 0 then
+            scale = 1.0;
+        end
+
+        while fontScalePushDepth > 0 do
+            imgui.PopFont();
+            fontScalePushDepth = fontScalePushDepth - 1;
+        end
+
+        if scale ~= 1.0 then
+            local font = imgui.GetFont();
+            imgui.PushFont(font, GetFontSizeBase() * scale);
+            fontScalePushDepth = 1;
+        end
+    end
 end
 
 -- ImGuiWindowFlags_NoInputs: skip missing on some Ashita builds (PetBarTarget mouse pass-through during drag-drop)

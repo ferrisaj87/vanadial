@@ -244,9 +244,12 @@ function M.Draw(openFlag, setOpen)
 
     local colorCfg = gConfig.colorCustomization and gConfig.colorCustomization.vanaTime;
 
-    -- Per-frame weather preview reset (mirrors config/vanatime.lua behaviour).
+    -- Weather icon preview: match the slider being adjusted, not always elemental.
     _G.XIUI_weatherElementalPreview = false;
     _G.XIUI_weatherBasePreview      = false;
+    if os.clock() < (_G.XIUI_weatherTestExpiry or 0) then
+        _G.XIUI_weatherElementalPreview = true;
+    end
 
     if imgui.BeginTabBar('##vt_cfg_tabs') then
 
@@ -398,7 +401,9 @@ function M.Draw(openFlag, setOpen)
                                 gConfig.vanaTimeWeatherIconSize = v[1];
                                 SaveVanaDialSettings();
                             end
-                            if imgui.IsItemActive() then _G.XIUI_weatherBasePreview = true; end
+                            if imgui.IsItemActive() or imgui.IsItemHovered() then
+                                _G.XIUI_weatherBasePreview = true;
+                            end
                             Tip('Size of non-elemental weather icons. Double right-click to reset.');
                             if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
                                 gConfig.vanaTimeWeatherIconSize = 28;
@@ -414,7 +419,9 @@ function M.Draw(openFlag, setOpen)
                                 gConfig.vanaTimeWeatherElementalIconSize = v[1];
                                 SaveVanaDialSettings();
                             end
-                            if imgui.IsItemActive() then _G.XIUI_weatherElementalPreview = true; end
+                            if imgui.IsItemActive() or imgui.IsItemHovered() then
+                                _G.XIUI_weatherElementalPreview = true;
+                            end
                             Tip('Size of elemental weather icons. Double right-click to reset.');
                             if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
                                 gConfig.vanaTimeWeatherElementalIconSize = 42;

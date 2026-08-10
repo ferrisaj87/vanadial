@@ -18,7 +18,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.27';
+addon.version = '1.4.28';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -141,13 +141,20 @@ gConfig.appliedPositions = {};
 local WINDOW_KEY = 'VanaDial';
 
 local function MigrateWindowSettings()
+    local changed = false;
     if gConfig.showVanaTime ~= nil and gConfig.showVanaDial == nil then
         gConfig.showVanaDial = gConfig.showVanaTime;
+        changed = true;
     end
-    if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
+    if not gConfig.windowPositions then
+        gConfig.windowPositions = T{};
+        changed = true;
+    end
     if gConfig.windowPositions['VanaTime'] and not gConfig.windowPositions[WINDOW_KEY] then
         gConfig.windowPositions[WINDOW_KEY] = gConfig.windowPositions['VanaTime'];
+        changed = true;
     end
+    return changed;
 end
 
 -- Debounced settings persistence. SaveWindowPosition() runs every frame while a
@@ -218,7 +225,9 @@ local function OnCharacterSettingsReady(s)
 
     InvalidateColorCaches();
     imtext.Reset();
-    MigrateWindowSettings();
+    if MigrateWindowSettings() then
+        SaveVanaDialSettings();
+    end
     gConfig.appliedPositions = T{};
     _allowPositionSave = false;
 
@@ -233,7 +242,10 @@ end
 local function ReloadCharacterSettingsIfNeeded()
     local key = GetSettingsCharKey();
     if not key or key == _activeCharKey then return; end
-    OnCharacterSettingsReady(settings.load(defaults));
+    -- Ashita's settings library already switches character tables via
+    -- settings.register; avoid settings.load() here — it can discard unsaved
+    -- position changes still waiting on the debounce timer.
+    _activeCharKey = key;
     RearmPositionIfInWorld();
 end
 
@@ -242,7 +254,9 @@ settings.register('settings', 'vd_char_settings', function(s)
     OnCharacterSettingsReady(s);
 end);
 
-MigrateWindowSettings();
+if MigrateWindowSettings() then
+    SaveVanaDialSettings();
+end
 
 -- ── Config window state ───────────────────────────────────────────────────────
 local _configOpen = false;
@@ -291,7 +305,7 @@ function SaveWindowPosition(windowName)
     if not gConfig or not _allowPositionSave then return; end
     local x, y = imgui.GetWindowPos();
     -- Ignore garbage positions during zoning / loading screens.
-    if x < 1 and y < 1 then return; end
+    if x < 0 or y < 0 then return; end
     if x > 10000 or y > 10000 then return; end
     if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
     local saved = gConfig.windowPositions[windowName];
@@ -638,7 +652,7 @@ ashita.events.register('d3d_present', 'vd_present', function()
 
     -- Apply the logged-in character's saved position once when entering the world.
     if inWorldDraw and not _wasInWorldDraw then
-        EnsureDefaultWindowPosition(false);
+        EnsureDefaultWindowPosition(true);
         if gConfig then gConfig.appliedPositions = T{}; end
         _positionReady = true;
     elseif not inWorldDraw then
@@ -684,7 +698,16 @@ ashita.events.register('d3d_present', 'vd_present', function()
     end
 
     if _configOpen then
-        config.Draw(_configOpen, function(open) _configOpen = open; end);
+        config.Draw(_configOpen, function(open)
+            if _configOpen and not open then
+                -- Flush debounced window position when settings close.
+                if _settingsDirty then
+                    _settingsDirty = false;
+                    SaveVanaDialSettings();
+                end
+            end
+            _configOpen = open;
+        end);
     end
 
     -- Debounced persistence: write the dragged window position to disk ~0.75s
