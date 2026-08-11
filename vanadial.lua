@@ -8,7 +8,10 @@
 *   /vd                   - Toggle Vana'Dial visibility
 *   /vd config            - Open/close the configuration window
 *   /vd ships             - Open/close airship timers section
-*   /vd boats             - Open/close boat timers section (expands all sub-routes)
+*   /vd boats             - Open/close ferry boat timers (Selbina/Mhaura/Whitegate/Nashmau)
+*   /vd boatsall          - Open/close all boat timer sub-groups
+*   /vd manaclipper       - Open/close Bibiki Manaclipper timers
+*   /vd barge             - Open/close Carpenters' Landing barge timers
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
 *   /vd reset             - Reset window position to default
@@ -18,7 +21,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.28';
+addon.version = '1.4.29';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -698,16 +701,21 @@ ashita.events.register('d3d_present', 'vd_present', function()
     end
 
     if _configOpen then
-        config.Draw(_configOpen, function(open)
-            if _configOpen and not open then
-                -- Flush debounced window position when settings close.
-                if _settingsDirty then
-                    _settingsDirty = false;
-                    SaveVanaDialSettings();
+        local ok, err = pcall(function()
+            config.Draw(_configOpen, function(open)
+                if _configOpen and not open then
+                    -- Flush debounced window position when settings close.
+                    if _settingsDirty then
+                        _settingsDirty = false;
+                        SaveVanaDialSettings();
+                    end
                 end
-            end
-            _configOpen = open;
+                _configOpen = open;
+            end);
         end);
+        if not ok then
+            VanaDialPrint('Config draw error: ' .. tostring(err));
+        end
     end
 
     -- Debounced persistence: write the dragged window position to disk ~0.75s
@@ -775,6 +783,18 @@ ashita.events.register('command', 'vd_command', function(e)
         hidden = false;
         popups.OpenTimersSection('vdboats');
 
+    elseif sub == 'boatsall' or sub == 'vtboatsall' then
+        hidden = false;
+        popups.OpenTimersSection('vdboatsall');
+
+    elseif sub == 'manaclipper' or sub == 'vtmanaclipper' then
+        hidden = false;
+        popups.OpenTimersSection('vdmanaclipper');
+
+    elseif sub == 'barge' or sub == 'vtbarge' then
+        hidden = false;
+        popups.OpenTimersSection('vdbarge');
+
     elseif sub == 'rse' or sub == 'vtrse' then
         hidden = false;
         popups.OpenTimersSection('vdrse');
@@ -807,7 +827,10 @@ ashita.events.register('command', 'vd_command', function(e)
         VanaDialPrint('  /vd               - Toggle visibility');
         VanaDialPrint('  /vd config        - Open config window');
         VanaDialPrint('  /vd ships         - Toggle airship timers (vtships ok)');
-        VanaDialPrint('  /vd boats         - Toggle boat timers (vtboats ok)');
+        VanaDialPrint('  /vd boats         - Toggle ferry boat timers (vtboats ok)');
+        VanaDialPrint('  /vd boatsall      - Toggle all boat timer groups (vtboatsall ok)');
+        VanaDialPrint('  /vd manaclipper   - Toggle Bibiki Manaclipper timers');
+        VanaDialPrint('  /vd barge         - Toggle Carpenters\' Landing barge timers');
         VanaDialPrint('  /vd rse           - Toggle RSE timers (vtrse ok)');
         VanaDialPrint('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
         VanaDialPrint('  /vd reset         - Reset window position');

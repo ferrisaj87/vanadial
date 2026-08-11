@@ -27,7 +27,10 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd` | Toggle visibility |
 | `/vd config` | Open configuration |
 | `/vd ships` | Toggle airship timers (expand section) |
-| `/vd boats` | Toggle boat timers |
+| `/vd boats` | Toggle ferry boat timers (Selbina/Mhaura/Whitegate/Nashmau) |
+| `/vd boatsall` | Toggle all boat timer sub-groups |
+| `/vd manaclipper` | Toggle Bibiki Manaclipper timers |
+| `/vd barge` | Toggle Carpenters' Landing barge timers |
 | `/vd rse` | Toggle RSE timers |
 | `/vd lunar` | Toggle lunar phase timers |
 | `/vd reset` | Reset window position |
@@ -39,7 +42,7 @@ On login, Vana'Dial checks GitHub once (after a short delay) and prints a chat m
 
 **Updating:** Run `/vd update` in-game (downloads addon files from GitHub, same as Anglin). Then `/addon reload vanadial`. Per-character settings under `config/addons/vanadial/` are not overwritten.
 
-Timer subcommands also accept `vtships`, `vtboats`, `vtrse`, and `vtlunar` (same as `ships`, `boats`, `rse`, `lunar`) if you are used to XIUI’s `/xiui vtships` naming.
+Timer subcommands also accept `vtships`, `vtboats`, `vtboatsall`, `vtmanaclipper`, `vtbarge`, `vtrse`, and `vtlunar` if you are used to XIUI-style naming.
 
 ## Requirements
 

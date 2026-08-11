@@ -197,7 +197,9 @@ function M.Measure(text, fontSize)
 
     local font = activeFont;
     if font and fontSize then
-        local pushOk = pcall(imgui.PushFont, font);
+        local pushOk = pcall(function()
+            imgui.PushFont(font, fontSize);
+        end);
         if pushOk then
             local lineH = imgui.GetTextLineHeight();
             local w = imgui.CalcTextSize(text);

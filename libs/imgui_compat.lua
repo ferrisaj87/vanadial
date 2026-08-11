@@ -159,10 +159,57 @@ if imgui.SetWindowFontScale == nil then
 
         if scale ~= 1.0 then
             local font = imgui.GetFont();
+            if not font then
+                return;
+            end
             imgui.PushFont(font, GetFontSizeBase() * scale);
             fontScalePushDepth = 1;
         end
     end
+end
+
+-- ImGui 1.92 requires PushFont(font, size). Wrap legacy single-arg callers.
+if imgui.PushFont then
+    local orig_imgui_PushFont = imgui.PushFont;
+    imgui.PushFont = function(font, size)
+        if size == nil then
+            local style = imgui.GetStyle();
+            if style and style.FontSizeBase and style.FontSizeBase > 0 then
+                size = style.FontSizeBase;
+            else
+                size = imgui.GetFontSize() or 13;
+            end
+        end
+        if font == nil then
+            font = imgui.GetFont();
+        end
+        if not font then
+            return;
+        end
+        return orig_imgui_PushFont(font, size);
+    end
+end
+
+-- Tab color renames (ImGui 1.90+) — apply whenever new names exist, any branch.
+if ImGuiCol_TabSelected ~= nil then
+    ImGuiCol_TabActive = ImGuiCol_TabSelected;
+    ImGuiCol_TabUnfocused = ImGuiCol_TabDimmed;
+    ImGuiCol_TabUnfocusedActive = ImGuiCol_TabDimmedSelected;
+end
+if ImGuiCol_Tab == nil then
+    ImGuiCol_Tab = ImGuiCol_Header or 0;
+end
+if ImGuiCol_TabHovered == nil then
+    ImGuiCol_TabHovered = ImGuiCol_HeaderHovered or 0;
+end
+if ImGuiCol_TabActive == nil then
+    ImGuiCol_TabActive = ImGuiCol_HeaderActive or 0;
+end
+if ImGuiCol_TabUnfocused == nil then
+    ImGuiCol_TabUnfocused = ImGuiCol_Header or 0;
+end
+if ImGuiCol_TabUnfocusedActive == nil then
+    ImGuiCol_TabUnfocusedActive = ImGuiCol_HeaderActive or 0;
 end
 
 -- ImGuiWindowFlags_NoInputs: skip missing on some Ashita builds (PetBarTarget mouse pass-through during drag-drop)

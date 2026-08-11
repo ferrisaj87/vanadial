@@ -532,6 +532,13 @@ local function FillRowBi(dst, subDst, labelFwd, labelRev, vtMinuteOfDay, vtDay, 
 end
 
 
+-- Collapsing-header labels for boat sub-groups (used by popups + /vd boat commands).
+M.BOAT_GROUP = {
+    FERRIES     = 'Boats  ',
+    MANACLIPPER = 'Bibiki Manaclipper  ',
+    BARGE       = "Carpenters' Landing Barge  ",
+};
+
 local _lastSec = -1;   -- airships + boats refresh on real-second change
 local _lastMin = -1;   -- RSE + lunar refresh on real-minute change
 
@@ -604,18 +611,18 @@ function M.Update(osNow, vtMinuteOfDay, vtDay, moonDay)
         local b  = M.boats;
         local bi = 0;
 
-        bi = bi + 1; FillHeader(b[bi], 'Boats  ');
+        bi = bi + 1; FillHeader(b[bi], M.BOAT_GROUP.FERRIES);
         bi = bi + 1; FillFerryRow(b[bi], 'Selbina',   'Mhaura',    vtMinuteOfDay, vtDay, osNow, DEP_SELBINA_SM, '<>');
         bi = bi + 1; FillFerryRow(b[bi], 'Mhaura',    'Whitegate', vtMinuteOfDay, vtDay, osNow, DEP_MHAURA_WG,  '<>');
         bi = bi + 1; FillFerryRow(b[bi], 'Whitegate', 'Nashmau',   vtMinuteOfDay, vtDay, osNow, DEP_WG_NASHMAU, '<>',
             FERRY_BOARD_VT_NASH, FERRY_TRANSIT_VT_NASH);
 
-        bi = bi + 1; FillHeader(b[bi], 'Bibiki Manaclipper  ');
+        bi = bi + 1; FillHeader(b[bi], M.BOAT_GROUP.MANACLIPPER);
         for _, route in ipairs(BIBIKI_ROUTES) do
             bi = bi + 1; FillCLRouteRow(b[bi], route, vtMinuteOfDay, vtDay, osNow);
         end
 
-        bi = bi + 1; FillHeader(b[bi], "Carpenters' Landing Barge  ");
+        bi = bi + 1; FillHeader(b[bi], M.BOAT_GROUP.BARGE);
         for _, route in ipairs(CL_ROUTES) do
             bi = bi + 1; FillCLRouteRow(b[bi], route, vtMinuteOfDay, vtDay, osNow);
         end

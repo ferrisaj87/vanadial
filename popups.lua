@@ -132,9 +132,9 @@ local measuredTimersH = 300;
 local TIMER_H_LERP    = 0.70;
 
 -- Command-driven section open: set by M.OpenTimersSection, cleared each frame.
-local pendingOpenSection = nil;   -- label string of section to force-open
-local pendingOpenBoats   = false; -- force all boat sub-groups open
-local lastOpenedSection  = nil;   -- key of the last section opened via command
+local pendingOpenSection  = nil;   -- label string of section to force-open
+local pendingOpenBoatGroups = nil; -- nil | 'all' | { [headerLabel] = true }
+local lastOpenedSection   = nil;   -- key of the last section opened via command
 
 -- ── Popup position cache (weather / TOD) ──────────────────────────────────────
 
@@ -209,8 +209,8 @@ local function CloseTimers()
     timersOpen           = false;
     lastOpenedSection    = nil;
     collapsePhase        = 0;
-    pendingOpenSection   = nil;
-    pendingOpenBoats     = false;
+    pendingOpenSection    = nil;
+    pendingOpenBoatGroups = nil;
 end
 
 function M.SetTimersOpen(open)
@@ -234,16 +234,69 @@ local SECTION_LABELS = {
     vdlunar = 'Lunar Phases##vdTimers',
 };
 local SECTION_KEY_ALIASES = {
-    vtships = 'vdships',
-    vtboats = 'vdboats',
-    vtrse   = 'vdrse',
-    vtlunar = 'vdlunar',
+    vtships    = 'vdships',
+    vtboats    = 'vdboats',
+    vtboatsall = 'vdboatsall',
+    vtmanaclipper = 'vdmanaclipper',
+    vtbarge    = 'vdbarge',
+    vtrse      = 'vdrse',
+    vtlunar    = 'vdlunar',
 };
+
+local BOAT_TIMER_COMMANDS = {
+    vdboats = {
+        groups = { timers.BOAT_GROUP.FERRIES },
+    },
+    vdboatsall = {
+        groups = 'all',
+    },
+    vdmanaclipper = {
+        groups = { timers.BOAT_GROUP.MANACLIPPER },
+    },
+    vdbarge = {
+        groups = { timers.BOAT_GROUP.BARGE },
+    },
+};
+
+local function SetPendingBoatGroups(spec)
+    if spec == 'all' then
+        pendingOpenBoatGroups = 'all';
+    elseif type(spec) == 'table' then
+        local open = {};
+        for _, label in ipairs(spec) do
+            open[label] = true;
+        end
+        pendingOpenBoatGroups = open;
+    else
+        pendingOpenBoatGroups = nil;
+    end
+end
+
+local function OpenBoatTimerCommand(key)
+    local cmd = BOAT_TIMER_COMMANDS[key];
+    if not cmd then return false; end
+
+    if timersOpen and lastOpenedSection == key then
+        CloseTimers();
+        return true;
+    end
+
+    M.SetTimersOpen(true);
+    pendingOpenSection = SECTION_LABELS.vdboats;
+    lastOpenedSection  = key;
+    SetPendingBoatGroups(cmd.groups);
+    return true;
+end
 
 -- Opens the timers popup and jumps to the given section.
 -- Calling a second time with the same key closes the popup entirely.
 function M.OpenTimersSection(key)
     key = SECTION_KEY_ALIASES[key] or key;
+
+    if OpenBoatTimerCommand(key) then
+        return;
+    end
+
     local label = SECTION_LABELS[key];
     if not label then return; end
     if timersOpen and lastOpenedSection == key then
@@ -253,7 +306,7 @@ function M.OpenTimersSection(key)
         M.SetTimersOpen(true);
         pendingOpenSection = label;
         lastOpenedSection  = key;
-        if key == 'vdboats' then pendingOpenBoats = true; end
+        pendingOpenBoatGroups = nil;
     end
 end
 
@@ -280,6 +333,30 @@ local VAR_FRAME_PADDING  = {6, 4};
 local VAR_POPUP_PADDING  = {6, 6};
 
 -- ── Timers popup helpers ──────────────────────────────────────────────────────
+
+-- ImGui 1.92 font sizing: use PushFont/PopFont stacks (SetWindowFontScale is deprecated).
+local function GetFontSizeBase()
+    local style = imgui.GetStyle();
+    if style and style.FontSizeBase and style.FontSizeBase > 0 then
+        return style.FontSizeBase;
+    end
+    local sz = imgui.GetFontSize();
+    if sz and sz > 1 then return sz; end
+    return 13;
+end
+
+local function PushFontPixelSize(size)
+    if not size or size <= 0 then return false; end
+    local font = imgui.GetFont();
+    if not font then return false; end
+    imgui.PushFont(font, size);
+    return true;
+end
+
+local function PushFontScaleFactor(factor)
+    if not factor or factor == 1.0 then return false; end
+    return PushFontPixelSize(GetFontSizeBase() * factor);
+end
 
 -- 2-phase collapse: phase 2 = collapse sub-groups only (parents stay open so
 -- sub-groups render), phase 1 = collapse top-level headers.
@@ -363,9 +440,7 @@ local function DrawRouteRow(row)
 end
 
 local function DrawAirshipLeg(leg, fontScale)
-    if fontScale and fontScale ~= 1.0 then
-        imgui.SetWindowFontScale(fontScale);
-    end
+    local fontPushed = PushFontScaleFactor(fontScale);
     if leg.city1 then
         imgui.TextColored(leg.city1Color, leg.city1);
         if leg.city2 and leg.city2 ~= '' then
@@ -395,9 +470,7 @@ local function DrawAirshipLeg(leg, fontScale)
     else
         imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
     end
-    if fontScale and fontScale ~= 1.0 then
-        imgui.SetWindowFontScale(1.0);
-    end
+    if fontPushed then imgui.PopFont(); end
 end
 
 local function DrawAirshipRow(row)
@@ -429,7 +502,9 @@ local function DrawBoatsContent()
         if entry.isHeader then
             if collapsePhase >= 1 then
                 imgui.SetNextItemOpen(false, ImGuiCond_Always);
-            elseif pendingOpenBoats then
+            elseif pendingOpenBoatGroups == 'all' then
+                imgui.SetNextItemOpen(true, ImGuiCond_Always);
+            elseif pendingOpenBoatGroups and pendingOpenBoatGroups[entry.label] then
                 imgui.SetNextItemOpen(true, ImGuiCond_Always);
             end
             local headerId = _boatGroupIds[entry.label];
@@ -582,16 +657,13 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     end
     imgui.SetNextWindowSizeConstraints({220, 0}, {600, 9999});
 
-    -- Capture global font size BEFORE Begin to avoid feedback loop.
-    local globalFontSize = imgui.GetFontSize();
-    if not globalFontSize or globalFontSize <= 1 then globalFontSize = 13; end
-
     local timersHovered = false;
     local began = false;
+    local windowFontPushed = false;
+    local ok, err = pcall(function()
     if imgui.Begin("Vana'Dial Timers##standalone", true, WIN_FLAGS_TIMERS) then
     began = true;
-        local fontScale = math.max(0.5, math.min(3.0, fontSize / globalFontSize));
-        imgui.SetWindowFontScale(fontScale);
+        windowFontPushed = PushFontPixelSize(fontSize);
 
         if side == 'below' then
             DrawCollapseButton();
@@ -609,8 +681,8 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         end
 
         -- Clear command-open flags after one frame so they don't re-fire.
-        pendingOpenSection = nil;
-        pendingOpenBoats   = false;
+        pendingOpenSection    = nil;
+        pendingOpenBoatGroups = nil;
 
         if side == 'above' then
             imgui.Separator();
@@ -626,9 +698,15 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         if timersHovered then
             timersLastActivity = os.clock();
         end
-        imgui.SetWindowFontScale(1.0);
+        if windowFontPushed then imgui.PopFont(); end
     end
     if began then imgui.End(); end
+    end);
+    if not ok then
+        if windowFontPushed then pcall(imgui.PopFont); end
+        if began then pcall(imgui.End); end
+        VanaDialPrint('Timers draw error: ' .. tostring(err));
+    end
 
     -- Auto-close: click outside
     if cfg.vanaTimeTimersAutoCloseClick then
@@ -730,6 +808,7 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
     local began = false;
+    local ok, err = pcall(function()
     if imgui.Begin("Vana'Dial Tod##standalone", true, WIN_FLAGS_WEATHER) then
     began = true;
         local pw, ph = imgui.GetWindowSize();
@@ -804,6 +883,11 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
         end
     end
     if began then imgui.End(); end
+    end);
+    if not ok then
+        if began then pcall(imgui.End); end
+        VanaDialPrint('TOD draw error: ' .. tostring(err));
+    end
     imgui.PopStyleVar(2);
 end
 
@@ -859,6 +943,7 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
     local began = false;
+    local ok, err = pcall(function()
     if imgui.Begin("Vana'Dial Weather##standalone", true, WIN_FLAGS_WEATHER) then
     began = true;
         local pw, ph = imgui.GetWindowSize();
@@ -921,6 +1006,11 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
         end
     end
     if began then imgui.End(); end
+    end);
+    if not ok then
+        if began then pcall(imgui.End); end
+        VanaDialPrint('Weather draw error: ' .. tostring(err));
+    end
     imgui.PopStyleVar(2);
 end
 
