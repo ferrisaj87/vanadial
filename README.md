@@ -6,8 +6,6 @@
 
 Standalone Ashita v4 addon for Horizon XI / FFXI: Vana'diel time, elemental days, moon phase, zone weather, and transport timers (airships, boats, RSE, lunar).
 
-Also available integrated in [XIUI](https://github.com/ferrisaj87/XIUI).
-
 ## Install
 
 Clone or copy this folder into your Ashita `addons` directory:
@@ -41,8 +39,6 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 On login, Vana'Dial checks GitHub once (after a short delay) and prints a chat message if a newer version is available.
 
 **Updating:** Run `/vd update` in-game (downloads addon files from GitHub, same as Anglin). Then `/addon reload vanadial`. Per-character settings under `config/addons/vanadial/` are not overwritten.
-
-Timer subcommands also accept `vtships`, `vtboats`, `vtboatsall`, `vtmanaclipper`, `vtbarge`, `vtrse`, and `vtlunar` if you are used to XIUI-style naming.
 
 ## Requirements
 
