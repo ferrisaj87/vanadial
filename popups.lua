@@ -122,6 +122,8 @@ end
 local timersOpen         = false;
 local timersLastActivity = 0;
 local timersOpenedAt     = 0;
+local _suppressTimerAutoCloseClick = false;
+local _pendingCloseTimers          = false;
 
 -- Smoothed height for "above" positioning — eliminates the 1-frame position
 -- blink caused by ImGui's pivot using a stale window height. We track the
@@ -211,6 +213,12 @@ local function CloseTimers()
     collapsePhase        = 0;
     pendingOpenSection    = nil;
     pendingOpenBoatGroups = nil;
+    _suppressTimerAutoCloseClick = false;
+    _pendingCloseTimers          = false;
+end
+
+function M.MarkTimersOpenedByUserClick()
+    _suppressTimerAutoCloseClick = true;
 end
 
 function M.SetTimersOpen(open)
@@ -441,6 +449,7 @@ end
 
 local function DrawAirshipLeg(leg, fontScale)
     local fontPushed = PushFontScaleFactor(fontScale);
+    local ok, err = pcall(function()
     if leg.city1 then
         imgui.TextColored(leg.city1Color, leg.city1);
         if leg.city2 and leg.city2 ~= '' then
@@ -470,7 +479,9 @@ local function DrawAirshipLeg(leg, fontScale)
     else
         imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
     end
+    end);
     if fontPushed then imgui.PopFont(); end
+    if not ok then error(err); end
 end
 
 local function DrawAirshipRow(row)
@@ -693,11 +704,23 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         local _, wh = imgui.GetWindowSize();
         if wh and wh > 1 then measuredTimersH = wh; end
 
-        -- Flag 32 = AllowWhenBlockedByActiveItem
+        -- Flag 32 = AllowWhenBlockedByPopup (ImGuiHoveredFlags_AllowWhenBlockedByPopup)
         timersHovered = imgui.IsWindowHovered(32);
         if timersHovered then
             timersLastActivity = os.clock();
         end
+
+        -- Auto-close on outside click: evaluate while the window is still active.
+        -- Doing this after End() can corrupt ImGui state for other addons in Present.
+        if cfg.vanaTimeTimersAutoCloseClick and not _suppressTimerAutoCloseClick then
+            if (imgui.IsMouseClicked(0) or imgui.IsMouseClicked(1))
+                and not timersHovered
+                and (os.clock() - timersOpenedAt) > 0.15 then
+                _pendingCloseTimers = true;
+            end
+        end
+        _suppressTimerAutoCloseClick = false;
+
         if windowFontPushed then imgui.PopFont(); end
     end
     if began then imgui.End(); end
@@ -708,13 +731,8 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         VanaDialPrint('Timers draw error: ' .. tostring(err));
     end
 
-    -- Auto-close: click outside
-    if cfg.vanaTimeTimersAutoCloseClick then
-        if (imgui.IsMouseClicked(0) or imgui.IsMouseClicked(1))
-            and not timersHovered
-            and (os.clock() - timersOpenedAt) > 0.15 then
-            CloseTimers();
-        end
+    if _pendingCloseTimers then
+        CloseTimers();
     end
 
     -- Auto-close: idle timeout

@@ -859,10 +859,13 @@ function M.DrawWindow(weatherId)
             if gearTex then
                 DLImage(drawList, gearTex, gx,gy, gx+isz,gy+isz, ToU32(0xCCC3AE79));
             end
-            if imgui.IsMouseHoveringRect({gx,gy},{gx+isz,gy+isz}) then
+            imgui.SetCursorScreenPos({gx, gy});
+            if imgui.InvisibleButton('##vdGear', {isz, isz}) then
+                if VanaDial_ToggleConfig then VanaDial_ToggleConfig(); end
+            end
+            if imgui.IsItemHovered() then
                 DLCircleFilled(drawList, gc2x,gc2y, isz*0.65, ToU32(0x30FFFFFF), 24);
                 if cfg.vanaTimeEnableTooltips ~= false then imgui.SetTooltip("Vana'Dial Settings"); end
-                if imgui.IsMouseClicked(0) and VanaDial_ToggleConfig then VanaDial_ToggleConfig(); end
             end
         end
 
@@ -881,11 +884,14 @@ function M.DrawWindow(weatherId)
                 if iconTex then
                     DLImage(drawList, iconTex, icxFinal,icY, icxFinal+isz,icY+isz, ToU32(0xCCFFFFFF));
                 end
-                if imgui.IsMouseHoveringRect({icxFinal,icY},{icxFinal+isz,icY+isz}) then
+                imgui.SetCursorScreenPos({icxFinal, icY});
+                if imgui.InvisibleButton('##vdTimerClk', {isz, isz}) then
+                    local wasOpen = popups.IsTimersOpen();
+                    popups.SetTimersOpen(not wasOpen);
+                    if not wasOpen then popups.MarkTimersOpenedByUserClick(); end
+                end
+                if imgui.IsItemHovered() then
                     DLCircleFilled(drawList, cx2,cy2, isz*0.65, ToU32(0x30FFFFFF), 24);
-                    if imgui.IsMouseClicked(0) then
-                        popups.SetTimersOpen(not popups.IsTimersOpen());
-                    end
                 end
                 if showGear then
                     DrawGearIcon(icxFinal + isz + 2, icY, isz);
