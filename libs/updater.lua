@@ -11,12 +11,11 @@ local M = {};
 
 local https     = require('socket.ssl.https');
 local http      = require('socket.http');
-local ltn12     = require('ltn12');
 local chatprint = require('libs.chatprint');
 http.TIMEOUT = 8;
 
-local REPO_API = 'https://api.github.com/repos/ferrisaj87/vanadial/commits/main';
 local RAW_ROOT = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/';
+local MAIN_VERSION_URL = RAW_ROOT .. 'main/vanadial.lua';
 local RETRY_DELAYS = { 2, 5, 15 };
 
 local UPDATE_RELATIVE = {
@@ -153,20 +152,10 @@ local function CleanupArtifacts(removeBackups)
 end
 
 local function FetchUrl(url)
-    local chunks = {};
-    local ok, result, code = pcall(function()
-        return https.request({
-            url = url .. (url:find('?', 1, true) and '&' or '?') .. 't=' .. os.time(),
-            method = 'GET',
-            headers = {
-                ['User-Agent'] = 'VanaDial-Ashita-Updater',
-                ['Accept'] = 'application/vnd.github+json',
-            },
-            sink = ltn12.sink.table(chunks),
-        });
+    local ok, body, code = pcall(function()
+        return https.request(url .. (url:find('?', 1, true) and '&' or '?') .. 't=' .. os.time());
     end);
-    local body = table.concat(chunks);
-    if not ok or not result or tonumber(code) ~= 200 or body == '' then
+    if not ok or tonumber(code) ~= 200 or type(body) ~= 'string' or body == '' then
         return nil, code;
     end
     if body:find('<!DOCTYPE', 1, true) or body:find('<html', 1, true) then
@@ -364,12 +353,13 @@ local function DownloadNext(job)
 end
 
 local function ResolveRemote(callback)
-    RetryFetch(REPO_API, 1, function(apiBody)
-        local commit = apiBody and apiBody:match('"sha"%s*:%s*"([0-9a-fA-F]+)"') or nil;
-        if not commit or #commit ~= 40 then
-            callback(nil, nil, 'could not pin remote commit');
+    RetryFetch(MAIN_VERSION_URL, 1, function(versionBody)
+        local remote = ParseVersionFromBody(versionBody);
+        if not remote then
+            callback(nil, nil, 'could not read remote version');
             return;
         end
+        local commit = 'v' .. remote;
         local versionUrl = RAW_ROOT .. commit .. '/vanadial.lua';
         RetryFetch(versionUrl, 1, function(versionBody, code)
             if not versionBody then
@@ -436,11 +426,12 @@ local function EnsureRuntimeFiles()
     if #missing == 0 then return true; end
 
     PrintMsg(string.format('Repairing %d missing runtime file(s)...', #missing));
-    local apiBody, apiErr = FetchUrl(REPO_API);
-    local commit = apiBody and apiBody:match('"sha"%s*:%s*"([0-9a-fA-F]+)"') or nil;
-    if not commit or #commit ~= 40 then
-        return false, apiErr or 'could not pin repair commit';
+    local versionBody, versionErr = FetchUrl(MAIN_VERSION_URL);
+    local remote = ParseVersionFromBody(versionBody);
+    if not remote then
+        return false, versionErr or 'could not read repair version';
     end
+    local commit = 'v' .. remote;
 
     for _, f in ipairs(missing) do
         local url = RAW_ROOT .. commit .. '/' .. f.relative:gsub('\\', '/');
