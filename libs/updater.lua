@@ -174,7 +174,10 @@ local function FetchUrl(url)
     if tonumber(code) ~= 200 or type(body) ~= 'string' or body == '' then
         return nil, code;
     end
-    if body:find('<!DOCTYPE', 1, true) or body:find('<html', 1, true) then
+    local prefix = body:sub(1, 256):lower();
+    prefix = prefix:gsub('^\239\187\191', ''):match('^%s*(.*)$') or '';
+    if prefix:sub(1, 9) == ('<' .. '!doctype')
+        or prefix:sub(1, 5) == ('<' .. 'html') then
         return nil, 'invalid response';
     end
     return body, 200;
