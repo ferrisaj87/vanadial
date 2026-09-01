@@ -12,7 +12,11 @@ local M = {};
 local https     = require('socket.ssl.https');
 local http      = require('socket.http');
 local chatprint = require('libs.chatprint');
-http.TIMEOUT = 8;
+local REQUEST_TIMEOUT = 8;
+local DOWNLOAD_DELAY = 0.35;
+local DOWNLOAD_BATCH_DELAY = 1.0;
+http.TIMEOUT = REQUEST_TIMEOUT;
+https.TIMEOUT = REQUEST_TIMEOUT;
 
 local RAW_ROOT = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/';
 local MAIN_VERSION_URL = RAW_ROOT .. 'main/vanadial.lua';
@@ -152,10 +156,22 @@ local function CleanupArtifacts(removeBackups)
 end
 
 local function FetchUrl(url)
+    -- Horizon's older LuaSec build can retain TLS userdata between rapid
+    -- requests. Reclaim it before opening another connection so larger update
+    -- manifests do not stall at the platform's socket/resource boundary.
+    pcall(collectgarbage, 'collect');
+    local requestUrl = url;
+    if url == MAIN_VERSION_URL then
+        requestUrl = url .. '?t=' .. os.time();
+    end
     local ok, body, code = pcall(function()
-        return https.request(url .. (url:find('?', 1, true) and '&' or '?') .. 't=' .. os.time());
+        return https.request(requestUrl);
     end);
-    if not ok or tonumber(code) ~= 200 or type(body) ~= 'string' or body == '' then
+    pcall(collectgarbage, 'collect');
+    if not ok then
+        return nil, tostring(body);
+    end
+    if tonumber(code) ~= 200 or type(body) ~= 'string' or body == '' then
         return nil, code;
     end
     if body:find('<!DOCTYPE', 1, true) or body:find('<html', 1, true) then
@@ -164,7 +180,12 @@ local function FetchUrl(url)
     return body, 200;
 end
 
-local function RetryFetch(url, attempt, callback)
+local function RetryFetch(url, attempt, callback, label)
+    if label then
+        PrintMsg(string.format(
+            'Downloading %s (attempt %d/%d)...',
+            label, attempt, #RETRY_DELAYS + 1));
+    end
     local body, code = FetchUrl(url);
     if body then
         callback(body);
@@ -172,7 +193,12 @@ local function RetryFetch(url, attempt, callback)
     end
     if attempt <= #RETRY_DELAYS then
         local delay = RETRY_DELAYS[attempt];
-        if Schedule(delay, function() RetryFetch(url, attempt + 1, callback); end) then
+        if label then
+            PrintMsg(string.format(
+                'Download paused (%s); retrying %s in %ds.',
+                tostring(code or 'network error'), label, delay));
+        end
+        if Schedule(delay, function() RetryFetch(url, attempt + 1, callback, label); end) then
             return;
         end
         code = 'retry scheduling failed';
@@ -273,6 +299,7 @@ end
 local function CommitStaged(job)
     job.entries = {};
     local journalLines = {};
+    PrintMsg('All files staged; creating verified backups...');
 
     -- Back up every original before changing any live file.
     for _, f in ipairs(UPDATE_FILES) do
@@ -301,7 +328,8 @@ local function CommitStaged(job)
     for i = 2, #UPDATE_FILES do order[#order + 1] = UPDATE_FILES[i]; end
     order[#order + 1] = UPDATE_FILES[1];
 
-    for _, f in ipairs(order) do
+    PrintMsg('Backups complete; installing update...');
+    for i, f in ipairs(order) do
         local staged = ReadFile(f.path .. '.vdtmp');
         if not staged then
             AbortCommit(job, 'A staged file disappeared during commit.');
@@ -311,6 +339,9 @@ local function CommitStaged(job)
         if not ok then
             AbortCommit(job, 'Update write failed: ' .. tostring(err));
             return;
+        end
+        if (i % 4) == 0 or i == #order then
+            PrintMsg(string.format('Installed %d/%d files...', i, #order));
         end
     end
 
@@ -326,6 +357,7 @@ local function DownloadNext(job)
     end
 
     local url = RAW_ROOT .. job.commit .. '/' .. f.relative:gsub('\\', '/');
+    local label = string.format('%d/%d: %s', job.index, #UPDATE_FILES, f.relative);
     RetryFetch(url, 1, function(body)
         if _updateJob ~= job then return; end
         if not body then
@@ -343,13 +375,13 @@ local function DownloadNext(job)
             return;
         end
         job.index = job.index + 1;
-        if (job.index % 3) == 0 or job.index > #UPDATE_FILES then
-            PrintMsg(string.format('Staged %d/%d files...', job.index - 1, #UPDATE_FILES));
-        end
-        if not Schedule(0.05, function() DownloadNext(job); end) then
+        local stagedCount = job.index - 1;
+        PrintMsg(string.format('Staged %d/%d: %s', stagedCount, #UPDATE_FILES, f.relative));
+        local delay = (stagedCount % 4) == 0 and DOWNLOAD_BATCH_DELAY or DOWNLOAD_DELAY;
+        if not Schedule(delay, function() DownloadNext(job); end) then
             FinishUpdate(false, 'Could not schedule the next download; installed files were not changed.', false);
         end
-    end);
+    end, label);
 end
 
 local function ResolveRemote(callback)
