@@ -31,7 +31,8 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd barge` | Toggle Carpenters' Landing barge timers |
 | `/vd rse` | Toggle RSE timers |
 | `/vd lunar` | Toggle lunar phase timers |
-| `/vd reset` | Reset window position |
+| `/vd sunbreezerace` | Toggle the independent standalone Sunbreeze Racing event window |
+| `/vd reset` | Reset the Vana'Dial and Sunbreeze Racing window positions |
 | `/vd update` | Download latest from GitHub (`main` branch); then `/addon reload vanadial` |
 | `/vd checkupdate` | Check GitHub for a newer version |
 | `/vanadial` | Alias for `/vd` |

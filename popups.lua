@@ -17,10 +17,16 @@ local imtext = require('libs.imtext');
 
 local TextureManager = require('libs.texturemanager');
 local windowbg       = require('libs.windowbackground');
+local Safe           = require('libs.imgui_safe');
 local timers         = require('timers');
 local data           = require('data');
 
 local M = {};
+
+local function NowSeconds()
+    local ms = data.GetTickMs and data.GetTickMs() or nil;
+    return ms and (ms / 1000) or os.clock();
+end
 
 -- ── Shared context (injected by display.lua at Initialize) ────────────────────
 -- ctx fields:
@@ -137,6 +143,7 @@ local TIMER_H_LERP    = 0.70;
 local pendingOpenSection  = nil;   -- label string of section to force-open
 local pendingOpenBoatGroups = nil; -- nil | 'all' | { [headerLabel] = true }
 local lastOpenedSection   = nil;   -- key of the last section opened via command
+local collapsePhase       = 0;
 
 -- ── Popup position cache (weather / TOD) ──────────────────────────────────────
 
@@ -224,8 +231,8 @@ end
 function M.SetTimersOpen(open)
     if open then
         timersOpen = true;
-        timersLastActivity = os.clock();
-        timersOpenedAt     = os.clock();
+        timersLastActivity = NowSeconds();
+        timersOpenedAt     = NowSeconds();
         -- Avoid a position jump when reopening above the clock: reuse the last
         -- measured height instead of a stale smoothed value from a prior session.
         smoothTimersH = measuredTimersH;
@@ -353,22 +360,8 @@ local function GetFontSizeBase()
     return 13;
 end
 
-local function PushFontPixelSize(size)
-    if not size or size <= 0 then return false; end
-    local font = imgui.GetFont();
-    if not font then return false; end
-    imgui.PushFont(font, size);
-    return true;
-end
-
-local function PushFontScaleFactor(factor)
-    if not factor or factor == 1.0 then return false; end
-    return PushFontPixelSize(GetFontSizeBase() * factor);
-end
-
 -- 2-phase collapse: phase 2 = collapse sub-groups only (parents stay open so
 -- sub-groups render), phase 1 = collapse top-level headers.
-local collapsePhase = 0;
 
 -- Wraps a CollapsingHeader with XIUI gold label text.
 local function DrawTimerSection(label, drawFn)
@@ -378,32 +371,38 @@ local function DrawTimerSection(label, drawFn)
         -- Command-driven open: expand only the target, collapse everything else.
         imgui.SetNextItemOpen(pendingOpenSection == label, ImGuiCond_Always);
     end
-    imgui.PushStyleColor(ImGuiCol_Text, COL_GOLD_TEXT);
-    local isOpen = imgui.CollapsingHeader(label);
-    imgui.PopStyleColor(1);
-    if isOpen then drawFn() end
+    local ok, err = Safe.Run(function(scope)
+        scope:PushStyleColor(ImGuiCol_Text, COL_GOLD_TEXT);
+        local isOpen = imgui.CollapsingHeader(label);
+        if isOpen then drawFn(); end
+    end);
+    if not ok then error(err); end
 end
 
 -- Thin separator between rows inside a timer section.
 local function DrawSectionDivider()
-    imgui.PushStyleColor(ImGuiCol_Separator, COL_SEPARATOR);
-    imgui.Separator();
-    imgui.PopStyleColor(1);
+    local ok, err = Safe.Run(function(scope)
+        scope:PushStyleColor(ImGuiCol_Separator, COL_SEPARATOR);
+        imgui.Separator();
+    end);
+    if not ok then error(err); end
 end
 
 -- Collapse-all button — closure-free; positioned closest to the main widget.
 local function DrawCollapseButton()
-    imgui.PushStyleColor(ImGuiCol_Button,        COL_BTN);
-    imgui.PushStyleColor(ImGuiCol_ButtonHovered, COL_BTN_HOVER);
-    imgui.PushStyleColor(ImGuiCol_ButtonActive,  COL_BTN_ACTIVE);
-    imgui.PushStyleColor(ImGuiCol_Text,          COL_BTN_TEXT);
-    if imgui.SmallButton('_##vtTimersCollapse') then
-        collapsePhase = 2;
-    end
-    if imgui.IsItemHovered() then
-        imgui.SetTooltip('Collapse');
-    end
-    imgui.PopStyleColor(4);
+    local ok, err = Safe.Run(function(scope)
+        scope:PushStyleColor(ImGuiCol_Button,        COL_BTN);
+        scope:PushStyleColor(ImGuiCol_ButtonHovered, COL_BTN_HOVER);
+        scope:PushStyleColor(ImGuiCol_ButtonActive,  COL_BTN_ACTIVE);
+        scope:PushStyleColor(ImGuiCol_Text,          COL_BTN_TEXT);
+        if imgui.SmallButton('_##vtTimersCollapse') then
+            collapsePhase = 2;
+        end
+        if imgui.IsItemHovered() then
+            imgui.SetTooltip('Collapse');
+        end
+    end);
+    if not ok then error(err); end
 end
 
 -- One transport route row: Label | Status | Countdown
@@ -448,8 +447,11 @@ local function DrawRouteRow(row)
 end
 
 local function DrawAirshipLeg(leg, fontScale)
-    local fontPushed = PushFontScaleFactor(fontScale);
-    local ok, err = pcall(function()
+    local ok, err = Safe.Run(function(scope)
+    local font = imgui.GetFont();
+    if fontScale and fontScale ~= 1.0 and font then
+        scope:PushFont(font, GetFontSizeBase() * fontScale);
+    end
     if leg.city1 then
         imgui.TextColored(leg.city1Color, leg.city1);
         if leg.city2 and leg.city2 ~= '' then
@@ -480,16 +482,17 @@ local function DrawAirshipLeg(leg, fontScale)
         imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
     end
     end);
-    if fontPushed then imgui.PopFont(); end
     if not ok then error(err); end
 end
 
 local function DrawAirshipRow(row)
     DrawAirshipLeg(row, 1.0);
     if row.sub then
-        imgui.Indent(18);
-        DrawAirshipLeg(row.sub, 0.82);
-        imgui.Unindent(18);
+        local ok, err = Safe.Run(function(scope)
+            scope:Indent(18);
+            DrawAirshipLeg(row.sub, 0.82);
+        end);
+        if not ok then error(err); end
     end
 end
 
@@ -508,7 +511,8 @@ local _boatGroupIds = {};
 local function DrawBoatsContent()
     local b = timers.boats;
     local groupOpen = false;
-    imgui.Indent(10);
+    local ok, err = Safe.Run(function(scope)
+    scope:Indent(10);
     for i, entry in ipairs(b) do
         if entry.isHeader then
             if collapsePhase >= 1 then
@@ -523,9 +527,11 @@ local function DrawBoatsContent()
                 headerId = entry.label .. '##boatGroup';
                 _boatGroupIds[entry.label] = headerId;
             end
-            imgui.PushStyleColor(ImGuiCol_Text, timers.colorGoldDark);
-            local open = imgui.CollapsingHeader(headerId);
-            imgui.PopStyleColor(1);
+            local headerOk, open = Safe.Run(function(headerScope)
+                headerScope:PushStyleColor(ImGuiCol_Text, timers.colorGoldDark);
+                return imgui.CollapsingHeader(headerId);
+            end);
+            if not headerOk then error(open); end
             groupOpen = open;
         elseif groupOpen then
             DrawRouteRow(entry);
@@ -534,7 +540,8 @@ local function DrawBoatsContent()
             end
         end
     end
-    imgui.Unindent(10);
+    end);
+    if not ok then error(err); end
 end
 
 local RSE_LOCATION_COLOR = {
@@ -648,14 +655,15 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     local side = cfg.vanaTimeTimerSide or 'above';
     local popX = mainWinPos.x;
 
-    imgui.PushStyleColor(ImGuiCol_WindowBg,      COL_WINDOW_BG);
-    imgui.PushStyleColor(ImGuiCol_Border,        COL_WINDOW_BORDER);
-    imgui.PushStyleColor(ImGuiCol_Header,        COL_HEADER);
-    imgui.PushStyleColor(ImGuiCol_HeaderHovered, COL_HEADER_HOVER);
-    imgui.PushStyleColor(ImGuiCol_HeaderActive,  COL_HEADER_ACTIVE);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_WINDOW_PADDING);
-    imgui.PushStyleVar(ImGuiStyleVar_FramePadding,  VAR_FRAME_PADDING);
+    local ok, err = Safe.Run(function(scope)
+    scope:PushStyleColor(ImGuiCol_WindowBg,      COL_WINDOW_BG);
+    scope:PushStyleColor(ImGuiCol_Border,        COL_WINDOW_BORDER);
+    scope:PushStyleColor(ImGuiCol_Header,        COL_HEADER);
+    scope:PushStyleColor(ImGuiCol_HeaderHovered, COL_HEADER_HOVER);
+    scope:PushStyleColor(ImGuiCol_HeaderActive,  COL_HEADER_ACTIVE);
+    scope:PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
+    scope:PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_WINDOW_PADDING);
+    scope:PushStyleVar(ImGuiStyleVar_FramePadding,  VAR_FRAME_PADDING);
 
     -- Smooth height lerp for "above" mode positioning (no pivot needed).
     smoothTimersH = smoothTimersH + (measuredTimersH - smoothTimersH) * TIMER_H_LERP;
@@ -668,13 +676,12 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     end
     imgui.SetNextWindowSizeConstraints({220, 0}, {600, 9999});
 
-    local timersHovered = false;
-    local began = false;
-    local windowFontPushed = false;
-    local ok, err = pcall(function()
-    if imgui.Begin("Vana'Dial Timers##standalone", true, WIN_FLAGS_TIMERS) then
-    began = true;
-        windowFontPushed = PushFontPixelSize(fontSize);
+    local visible = scope:BeginWindow("Vana'Dial Timers##standalone", true, WIN_FLAGS_TIMERS);
+    if visible then
+        local font = imgui.GetFont();
+        if font and fontSize and fontSize > 0 then
+            scope:PushFont(font, fontSize);
+        end
 
         if side == 'below' then
             DrawCollapseButton();
@@ -705,9 +712,9 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         if wh and wh > 1 then measuredTimersH = wh; end
 
         -- Flag 32 = AllowWhenBlockedByPopup (ImGuiHoveredFlags_AllowWhenBlockedByPopup)
-        timersHovered = imgui.IsWindowHovered(32);
+        local timersHovered = imgui.IsWindowHovered(32);
         if timersHovered then
-            timersLastActivity = os.clock();
+            timersLastActivity = NowSeconds();
         end
 
         -- Auto-close on outside click: evaluate while the window is still active.
@@ -715,20 +722,16 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         if cfg.vanaTimeTimersAutoCloseClick and not _suppressTimerAutoCloseClick then
             if (imgui.IsMouseClicked(0) or imgui.IsMouseClicked(1))
                 and not timersHovered
-                and (os.clock() - timersOpenedAt) > 0.15 then
+                and (NowSeconds() - timersOpenedAt) > 0.15 then
                 _pendingCloseTimers = true;
             end
         end
         _suppressTimerAutoCloseClick = false;
 
-        if windowFontPushed then imgui.PopFont(); end
     end
-    if began then imgui.End(); end
     end);
     if not ok then
-        if windowFontPushed then pcall(imgui.PopFont); end
-        if began then pcall(imgui.End); end
-        VanaDialPrint('Timers draw error: ' .. tostring(err));
+        error(err);
     end
 
     if _pendingCloseTimers then
@@ -738,13 +741,11 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     -- Auto-close: idle timeout
     if cfg.vanaTimeTimersAutoCloseIdle then
         local idleSec = cfg.vanaTimeTimersAutoCloseIdleSec or 5;
-        if os.clock() - timersLastActivity > idleSec then
+        if NowSeconds() - timersLastActivity > idleSec then
             CloseTimers();
         end
     end
 
-    imgui.PopStyleVar(3);
-    imgui.PopStyleColor(5);
 end
 
 -- ── Public: DrawTodPopup ───────────────────────────────────────────────────────
@@ -821,14 +822,13 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
         popX = (align == 'right') and (wx + ww - cachedTodW) or wx;
     end
 
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
+    local ok, err = Safe.Run(function(scope)
+    scope:PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
+    scope:PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
-    local began = false;
-    local ok, err = pcall(function()
-    if imgui.Begin("Vana'Dial Tod##standalone", true, WIN_FLAGS_WEATHER) then
-    began = true;
+    local visible = scope:BeginWindow("Vana'Dial Tod##standalone", true, WIN_FLAGS_WEATHER);
+    if visible then
         local pw, ph = imgui.GetWindowSize();
         cachedTodH = ph;
         cachedTodW = pw;
@@ -900,13 +900,10 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
             end
         end
     end
-    if began then imgui.End(); end
     end);
     if not ok then
-        if began then pcall(imgui.End); end
-        VanaDialPrint('TOD draw error: ' .. tostring(err));
+        error(err);
     end
-    imgui.PopStyleVar(2);
 end
 
 -- ── Public: DrawWeatherPopup ───────────────────────────────────────────────────
@@ -956,14 +953,13 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
     popX = popX + (offX or 0);
     popY = popY + (offY or 0);
 
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
+    local ok, err = Safe.Run(function(scope)
+    scope:PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
+    scope:PushStyleVar(ImGuiStyleVar_WindowPadding, VAR_POPUP_PADDING);
     imgui.SetNextWindowPos({popX, popY}, ImGuiCond_Always);
 
-    local began = false;
-    local ok, err = pcall(function()
-    if imgui.Begin("Vana'Dial Weather##standalone", true, WIN_FLAGS_WEATHER) then
-    began = true;
+    local visible = scope:BeginWindow("Vana'Dial Weather##standalone", true, WIN_FLAGS_WEATHER);
+    if visible then
         local pw, ph = imgui.GetWindowSize();
         cachedWeatherH = ph;
         cachedWeatherW = pw;
@@ -1023,13 +1019,10 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
             end
         end
     end
-    if began then imgui.End(); end
     end);
     if not ok then
-        if began then pcall(imgui.End); end
-        VanaDialPrint('Weather draw error: ' .. tostring(err));
+        error(err);
     end
-    imgui.PopStyleVar(2);
 end
 
 -- ── Public: GetCachedSizes (used by display for popup stacking offsets) ────────

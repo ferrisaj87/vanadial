@@ -8,18 +8,26 @@
 require('common');
 local settings = require('settings');
 local imgui    = require('imgui');
+local Safe     = require('libs.imgui_safe');
+local data     = require('data');
 
 local M = {};
+local activeScope = nil;
+
+local function NowSeconds()
+    local ms = data.GetTickMs and data.GetTickMs() or nil;
+    return ms and (ms / 1000) or os.clock();
+end
 
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 
 local function Tip(text)
     if imgui.IsItemHovered() then
-        imgui.BeginTooltip();
-        imgui.PushTextWrapPos(imgui.GetFontSize() * 28);
+        local mark = activeScope:Mark();
+        activeScope:BeginTooltip();
+        activeScope:PushTextWrapPos(imgui.GetFontSize() * 28);
         imgui.TextUnformatted(text);
-        imgui.PopTextWrapPos();
-        imgui.EndTooltip();
+        activeScope:CloseTo(mark);
     end
 end
 
@@ -78,7 +86,8 @@ local function Combo(label, key, labels, values, default, width)
     end
 
     imgui.SetNextItemWidth(width or COMBO_WIDTH_SIDE);
-    if imgui.BeginCombo(label, currentLabel) then
+    local mark = activeScope:Mark();
+    if activeScope:BeginCombo(label, currentLabel) then
         for i, itemLabel in ipairs(labels) do
             local itemValue = values[i];
             local isSelected = (itemValue == current);
@@ -90,8 +99,8 @@ local function Combo(label, key, labels, values, default, width)
                 imgui.SetItemDefaultFocus();
             end
         end
-        imgui.EndCombo();
     end
+    activeScope:CloseTo(mark);
 end
 
 -- ARGB <-> ImGui float[4] conversion helpers.
@@ -144,7 +153,8 @@ local VD_COMMANDS = {
     { '/vd barge',       "Open the timers popup with Carpenters' Landing barge expanded. Run again to close the popup." },
     { '/vd rse',    'Open the timers popup with RSE expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
-    { '/vd reset',  "Reset the main Vana'Dial window position to the default (100, 100)." },
+    { '/vd sunbreezerace', 'Toggle the independent Sunbreeze Racing event window.' },
+    { '/vd reset',  "Reset the Vana'Dial and Sunbreeze Racing window positions." },
     { '/vd update', 'Download the latest version from GitHub, then /addon reload vanadial.' },
     { '/vd checkupdate', 'Check whether a newer version is available on GitHub.' },
 };
@@ -203,31 +213,17 @@ local THEME_VARS = {
     { ImGuiStyleVar_FramePadding,   {7, 4} },
 };
 
-local _pushedColors = 0;
-local _pushedVars   = 0;
-
-local function PushTheme()
-    _pushedColors = 0;
+local function PushTheme(scope)
     for _, c in ipairs(THEME_COLORS) do
         if c[1] ~= nil then
-            imgui.PushStyleColor(c[1], c[2]);
-            _pushedColors = _pushedColors + 1;
+            scope:PushStyleColor(c[1], c[2]);
         end
     end
-    _pushedVars = 0;
     for _, v in ipairs(THEME_VARS) do
         if v[1] ~= nil then
-            imgui.PushStyleVar(v[1], v[2]);
-            _pushedVars = _pushedVars + 1;
+            scope:PushStyleVar(v[1], v[2]);
         end
     end
-end
-
-local function PopTheme()
-    if _pushedVars   > 0 then imgui.PopStyleVar(_pushedVars);     end
-    if _pushedColors > 0 then imgui.PopStyleColor(_pushedColors); end
-    _pushedVars   = 0;
-    _pushedColors = 0;
 end
 
 -- ── Draw ──────────────────────────────────────────────────────────────────────
@@ -235,29 +231,29 @@ end
 -- @param openFlag bool - whether the window is currently open
 -- @param setOpen  fn(bool) - callback to update open state
 function M.Draw(openFlag, setOpen)
-    PushTheme();
+    local open = T{ openFlag };
+    local ok, err = Safe.Run(function(scope)
+    activeScope = scope;
+    PushTheme(scope);
     imgui.SetNextWindowSize(T{520, 600}, ImGuiCond_FirstUseEver);
     imgui.SetNextWindowSizeConstraints(T{420, 300}, T{900, 1200});
-    local open = T{ openFlag };
-    -- Never call imgui.End() when Begin returns false — that corrupts ImGui's stack
-    -- and can crash the client when the window is closed or collapsed.
-    local began = false;
-    if imgui.Begin("Vana'Dial Settings##standalone", open, ImGuiWindowFlags_None) then
-    began = true;
+    if scope:BeginWindow("Vana'Dial Settings##standalone", open, ImGuiWindowFlags_None) then
 
     local colorCfg = gConfig.colorCustomization and gConfig.colorCustomization.vanaTime;
 
     -- Weather icon preview: match the slider being adjusted, not always elemental.
     _G.XIUI_weatherElementalPreview = false;
     _G.XIUI_weatherBasePreview      = false;
-    if os.clock() < (_G.XIUI_weatherTestExpiry or 0) then
+    if NowSeconds() < (_G.XIUI_weatherTestExpiry or 0) then
         _G.XIUI_weatherElementalPreview = true;
     end
 
-    if imgui.BeginTabBar('##vt_cfg_tabs') then
+    local tabBarMark = scope:Mark();
+    if scope:BeginTabBar('##vt_cfg_tabs') then
 
         -- ── General tab ───────────────────────────────────────────────────────
-        if imgui.BeginTabItem('General') then
+        local tabMark = scope:Mark();
+        if scope:BeginTabItem('General') then
 
             CB('Enabled', 'showVanaDial');
             CB('Hide When Menu Open', 'vanaTimeHideOnMenuFocus');
@@ -323,11 +319,12 @@ function M.Draw(openFlag, setOpen)
                 imgui.Unindent(12);
             end
 
-            imgui.EndTabItem();
         end
+        scope:CloseTo(tabMark);
 
         -- ── Panels tab ────────────────────────────────────────────────────────
-        if imgui.BeginTabItem('Panels') then
+        tabMark = scope:Mark();
+        if scope:BeginTabItem('Panels') then
 
             -- Time of Day
             if imgui.CollapsingHeader('Time of Day Tab##vt', ImGuiTreeNodeFlags_DefaultOpen) then
@@ -371,7 +368,7 @@ function M.Draw(openFlag, setOpen)
                 if hideNonElem and gConfig.vanaTimeShowWeather ~= false then
                     imgui.SameLine(0, 8);
                     if imgui.Button('Test Placement##wx') then
-                        _G.XIUI_weatherTestExpiry = os.clock() + 30;
+                        _G.XIUI_weatherTestExpiry = NowSeconds() + 30;
                     end
                     Tip('Temporarily shows a blinking weather icon for 30s so you can\nposition the tab without waiting for elemental weather.');
                 end
@@ -468,11 +465,12 @@ function M.Draw(openFlag, setOpen)
                 imgui.Unindent(12);
             end
 
-            imgui.EndTabItem();
         end
+        scope:CloseTo(tabMark);
 
         -- ── Tooltips tab ──────────────────────────────────────────────────────
-        if imgui.BeginTabItem('Tooltips') then
+        tabMark = scope:Mark();
+        if scope:BeginTabItem('Tooltips') then
             CB('Enable Tooltips', 'vanaTimeEnableTooltips');
             Tip("Master toggle for all hover tooltips in the Vana'Dial module.");
             if gConfig.vanaTimeEnableTooltips ~= false then
@@ -505,11 +503,12 @@ function M.Draw(openFlag, setOpen)
                 end
                 imgui.Unindent(12);
             end
-            imgui.EndTabItem();
         end
+        scope:CloseTo(tabMark);
 
         -- ── Colors tab ────────────────────────────────────────────────────────
-        if imgui.BeginTabItem('Colors') then
+        tabMark = scope:Mark();
+        if scope:BeginTabItem('Colors') then
             if not colorCfg then
                 imgui.TextDisabled('Color config not available.');
             else
@@ -563,11 +562,12 @@ function M.Draw(openFlag, setOpen)
                     imgui.Unindent(12);
                 end
             end
-            imgui.EndTabItem();
         end
+        scope:CloseTo(tabMark);
 
         -- ── Commands tab ──────────────────────────────────────────────────────
-        if imgui.BeginTabItem('Commands') then
+        tabMark = scope:Mark();
+        if scope:BeginTabItem('Commands') then
             imgui.TextWrapped('/vanadial is an alias for /vd. Unknown subcommands print the same list to chat.');
             imgui.Spacing();
             imgui.Separator();
@@ -581,17 +581,16 @@ function M.Draw(openFlag, setOpen)
                 imgui.Spacing();
             end
 
-            imgui.EndTabItem();
         end
-
-        imgui.EndTabBar();
-    end
+        scope:CloseTo(tabMark);
 
     end
+    scope:CloseTo(tabBarMark);
 
-    if began then imgui.End(); end
-
-    PopTheme();
+    end
+    end);
+    activeScope = nil;
+    if not ok then error(err); end
     if not open[1] then
         setOpen(false);
     end

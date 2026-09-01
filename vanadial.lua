@@ -14,14 +14,15 @@
 *   /vd barge             - Open/close Carpenters' Landing barge timers
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
-*   /vd reset             - Reset window position to default
+*   /vd sunbreezerace     - Toggle the Sunbreeze Racing event window
+*   /vd reset             - Reset Vana'Dial and Sunbreeze window positions
 *   /vd update            - Download latest from GitHub (then /addon reload vanadial)
 *   /vd checkupdate       - Check GitHub for a newer version
 ]]--
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.30';
+addon.version = '1.4.31';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -37,7 +38,12 @@ local colorLib          = require('libs.color');
 local chatprint         = require('libs.chatprint');
 local updater           = require('libs.updater');
 VanaDialPrint           = chatprint.Print;
-updater.Init(addon.version);
+local updaterReady, updaterRecovered = updater.Init(addon.version);
+if not updaterReady then
+    error("Vana'Dial update recovery failed; refusing to load mixed files. Restore the preserved .vdbak files and reload.");
+elseif updaterRecovered then
+    error("Vana'Dial recovered an interrupted update. Reload the addon to load the restored files safely.");
+end
 ARGBToRGBA              = colorLib.ARGBToRGBA;
 RGBAToARGB              = colorLib.RGBAToARGB;
 ARGBToImGui             = colorLib.ARGBToImGui;
@@ -54,6 +60,13 @@ GetColorSetting         = colorLib.GetColorSetting;
 GetGradientSetting      = colorLib.GetGradientSetting;
 GetGradientTextColor    = colorLib.GetGradientTextColor;
 local imtext            = require('libs.imtext');
+local data              = require('data');
+
+local function MonotonicMs()
+    local ms = data.GetTickMs and data.GetTickMs() or nil;
+    if ms ~= nil then return ms; end
+    return math.floor(os.clock() * 1000);
+end
 
 -- ── Settings ──────────────────────────────────────────────────────────────────
 local defaults = T{
@@ -170,7 +183,7 @@ local _allowPositionSave  = false;
 
 local function MarkSettingsDirty()
     _settingsDirty   = true;
-    _settingsDirtyAt = os.clock();
+    _settingsDirtyAt = MonotonicMs();
 end
 
 -- Never persist appliedPositions (session-only; corrupts re-apply on reload).
@@ -178,8 +191,13 @@ function SaveVanaDialSettings()
     if not gConfig then return; end
     local applied = gConfig.appliedPositions;
     gConfig.appliedPositions = nil;
-    settings.save();
+    local ok, err = pcall(settings.save);
     gConfig.appliedPositions = applied or T{};
+    if not ok then
+        _settingsDirty = true;
+        _settingsDirtyAt = MonotonicMs();
+        error(err);
+    end
 end
 
 local function EnsureDefaultWindowPosition(persist)
@@ -296,7 +314,13 @@ function ApplyWindowPosition(windowName)
         if not gConfig.appliedPositions then gConfig.appliedPositions = {}; end
         if not gConfig.appliedPositions[windowName] then
             local pos = gConfig.windowPositions[windowName];
-            imgui.SetNextWindowPos({pos.x, pos.y}, ImGuiCond_Always);
+            local x, y = tonumber(pos.x), tonumber(pos.y);
+            if not x or not y or x < -32000 or y < -32000 or x > 32000 or y > 32000 then
+                gConfig.windowPositions[windowName] = nil;
+                MarkSettingsDirty();
+                return false;
+            end
+            imgui.SetNextWindowPos({x, y}, ImGuiCond_Always);
             gConfig.appliedPositions[windowName] = true;
             return true;
         end
@@ -307,9 +331,9 @@ end
 function SaveWindowPosition(windowName)
     if not gConfig or not _allowPositionSave then return; end
     local x, y = imgui.GetWindowPos();
-    -- Ignore garbage positions during zoning / loading screens.
-    if x < 0 or y < 0 then return; end
-    if x > 10000 or y > 10000 then return; end
+    -- Allow monitors left/above the primary display while rejecting corrupt data.
+    if type(x) ~= 'number' or type(y) ~= 'number' then return; end
+    if x < -32000 or y < -32000 or x > 32000 or y > 32000 then return; end
     if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
     local saved = gConfig.windowPositions[windowName];
     if not saved then
@@ -333,6 +357,7 @@ require('libs.imgui_compat');
 local display         = require('display');
 local popups          = require('popups');
 local config          = require('config');
+local sunbreeze       = require('sunbreeze');
 local TextureManager  = require('libs.texturemanager');
 
 -- ── Module state ──────────────────────────────────────────────────────────────
@@ -340,6 +365,45 @@ local hidden             = false;
 local weatherId          = 0;
 local _wasInWorldDraw    = false;
 local _inWorldReady          = false;
+
+-- A failing PRESENT component is paused before retrying so one bad frame cannot
+-- repeatedly corrupt state, flood chat, or take down later addons.
+local _presentFailures = {};
+local PRESENT_RETRY_MS = { 1000, 5000, 15000, 60000 };
+
+local function Traceback(err)
+    if debug and debug.traceback then
+        return debug.traceback(tostring(err), 2);
+    end
+    return tostring(err);
+end
+
+local function RunPresentComponent(name, fn)
+    local now = MonotonicMs();
+    local state = _presentFailures[name];
+    if state and now < (state.retryAt or 0) then
+        return false;
+    end
+
+    local ok, err = xpcall(fn, Traceback);
+    if ok then
+        _presentFailures[name] = nil;
+        return true;
+    end
+
+    state = state or { attempts = 0, retryAt = 0, lastLogAt = -60000 };
+    state.attempts = math.min(state.attempts + 1, #PRESENT_RETRY_MS);
+    state.retryAt = now + PRESENT_RETRY_MS[state.attempts];
+    _presentFailures[name] = state;
+
+    if now - state.lastLogAt >= 30000 then
+        state.lastLogAt = now;
+        pcall(VanaDialPrint, string.format(
+            '%s failed; retrying in %.0fs: %s',
+            name, PRESENT_RETRY_MS[state.attempts] / 1000, tostring(err)));
+    end
+    return false;
+end
 
 -- ── In-world gate (zonename / minimap pattern) ────────────────────────────────
 -- Do not draw on the title screen, character select, or while zoning.
@@ -358,8 +422,8 @@ local _presentMenuOpen  = false;
 local _presentChatOpen  = false;
 local _menuChatTick      = -1;
 local _inWorldTick       = -1;
-local MENU_CHAT_INTERVAL = 0.12; -- menu name chain is heavier than chat-expanded byte read
-local IN_WORLD_INTERVAL  = 0.15; -- party/entity probe; zone-in lags slightly at most this long
+local MENU_CHAT_INTERVAL_MS = 120; -- menu name chain is heavier than chat-expanded byte read
+local IN_WORLD_INTERVAL_MS  = 150; -- party/entity probe; zone-in lags slightly at most this long
 
 local function IsPlayerInWorld()
     local ok, ready = pcall(function()
@@ -406,9 +470,6 @@ local function BeginZoning()
     _allowPositionSave = false;
     _positionReady = false;
 end
-local pendingWeatherRead = false;
-local pendingWeatherTime = 0;
-
 -- ── Weather (packet 0x057 primary; memory fallback on zone-in only) ───────────
 -- Incoming 0x057 carries weather ID at byte offset 0x08. Reading memory on every
 -- 0x057 was re-scanning FFXiMain.dll when the pointer was wrong, causing ~1s hitches.
@@ -442,7 +503,7 @@ local function ResolveWeatherPtrOnce()
 end
 
 local function ReadWeatherFromMemory()
-    local ptr = ResolveWeatherPtrOnce();
+    local ptr = _weatherPtr;
     if not ptr then return nil end;
     local ok, w = pcall(function() return ashita.memory.read_uint8(ptr); end);
     if ok and type(w) == 'number' and w >= 0 and w <= 19 then
@@ -460,10 +521,6 @@ end
 
 local function ResetWeatherState()
     weatherId             = 0;
-    pendingWeatherRead    = false;
-    pendingWeatherTime    = 0;
-    _weatherPtr           = nil;
-    _weatherMemResolved   = false;
 end
 
 -- ── Game menu detection (for "Hide When Menu Open") ───────────────────────────
@@ -484,9 +541,6 @@ local function ResolveGameMenuPtr()
 end
 
 local function EnsureGameMenuPtr()
-    if _pGameMenu or _gameMenuFailed then return _pGameMenu end;
-    _pGameMenu = ResolveGameMenuPtr();
-    if not _pGameMenu then _gameMenuFailed = true; end
     return _pGameMenu;
 end
 
@@ -539,9 +593,6 @@ local function ResolveChatExpandedPtr()
 end
 
 local function EnsureChatExpandedPtr()
-    if _pChatExpanded or _chatExpandedFailed then return _pChatExpanded end;
-    _pChatExpanded = ResolveChatExpandedPtr();
-    if not _pChatExpanded then _chatExpandedFailed = true; end
     return _pChatExpanded;
 end
 
@@ -556,17 +607,58 @@ local function IsChatExpanded()
     return false;
 end
 
+-- Signature scans never run from PRESENT. They are resolved during load or a
+-- delayed Ashita task after zoning; failures are nonfatal and retried later.
+local function ResolveClientPointers()
+    if not _weatherPtr then
+        _weatherMemResolved = false;
+        ResolveWeatherPtrOnce();
+    end
+    if not _pGameMenu then
+        _gameMenuFailed = false;
+        _pGameMenu = ResolveGameMenuPtr();
+        _gameMenuFailed = _pGameMenu == nil;
+    end
+    if not _pChatExpanded then
+        _chatExpandedFailed = false;
+        _pChatExpanded = ResolveChatExpandedPtr();
+        _chatExpandedFailed = _pChatExpanded == nil;
+    end
+    return _weatherPtr ~= nil and _pGameMenu ~= nil and _pChatExpanded ~= nil;
+end
+
+local _pointerResolveGeneration = 0;
+local function SchedulePointerResolve(initialDelay)
+    _pointerResolveGeneration = _pointerResolveGeneration + 1;
+    local generation = _pointerResolveGeneration;
+
+    local function scheduleAttempt(delay, attempt)
+        local scheduled = pcall(function()
+            ashita.tasks.once(delay, function()
+                if generation ~= _pointerResolveGeneration then return; end
+                local ok, complete = xpcall(ResolveClientPointers, Traceback);
+                if ok and _weatherPtr then
+                    local w = ReadWeatherFromMemory();
+                    if w ~= nil then weatherId = w; end
+                end
+                if (not ok or not complete) and attempt < 4 then
+                    scheduleAttempt(math.min(5 * attempt, 30), attempt + 1);
+                end
+            end);
+        end);
+        return scheduled;
+    end
+
+    scheduleAttempt(initialDelay or 0, 1);
+end
+
 -- Must be defined AFTER IsGameMenuOpen / IsChatExpanded (Lua resolves locals at compile time).
 local function RefreshPresentCache()
-    local t = os.clock();
+    local t = MonotonicMs();
     if t == _presentTick then return; end
     _presentTick = t;
 
-    if hidden or gConfig.showVanaDial == false then
-        _presentInWorld = false;
-        _inWorldReady   = false;
-        _inWorldTick    = t;
-    elseif _inWorldTick < 0 or (t - _inWorldTick) >= IN_WORLD_INTERVAL then
+    if _inWorldTick < 0 or (t - _inWorldTick) >= IN_WORLD_INTERVAL_MS then
         _inWorldTick  = t;
         local ready   = IsPlayerInWorld();
         _inWorldReady = ready;
@@ -579,7 +671,7 @@ local function RefreshPresentCache()
     local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
     local needChat = gConfig.vanaTimeHideOnChatExpanded == true;
     if needMenu then
-        if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL then
+        if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL_MS then
             _menuChatTick = t;
             _presentMenuOpen = IsGameMenuOpen();
         end
@@ -618,8 +710,10 @@ ashita.events.register('load', 'vd_load', function()
     -- Tahoma, so prewarm just that family (regular + bold).
     imtext.PrewarmFonts({'Tahoma'});
     display.Initialize();
-    local w = ReadWeatherFromMemory();
+    local pointersOk, complete = xpcall(ResolveClientPointers, Traceback);
+    local w = pointersOk and ReadWeatherFromMemory() or nil;
     if w ~= nil then weatherId = w; end
+    if not pointersOk or not complete then SchedulePointerResolve(5); end
     _positionReady = false;
     _wasInWorldDraw = false;
     _presentTick = -1;
@@ -637,7 +731,11 @@ ashita.events.register('text_in', 'vd_welcome', function(e)
 end);
 
 ashita.events.register('unload', 'vd_unload', function()
+    _pointerResolveGeneration = _pointerResolveGeneration + 1;
+    updater.Cancel();
     ResetWeatherState();
+    _weatherPtr = nil;
+    _weatherMemResolved = false;
     _pGameMenu = nil;
     _gameMenuFailed = false;
     _pChatExpanded = nil;
@@ -648,8 +746,9 @@ ashita.events.register('unload', 'vd_unload', function()
     SaveVanaDialSettings();
 end);
 
-ashita.events.register('d3d_present', 'vd_present', function()
-    RefreshPresentCache();
+local function PresentFrame()
+    RunPresentComponent('Texture release', TextureManager.FlushPendingReleases);
+    if not RunPresentComponent('Present cache', RefreshPresentCache) then return; end
 
     local inWorldDraw = _presentInWorld and not IsPlayerZoningNow() and GetSettingsCharKey() ~= nil;
 
@@ -665,84 +764,84 @@ ashita.events.register('d3d_present', 'vd_present', function()
 
     if inWorldDraw then
         _allowPositionSave = true;
+        RunPresentComponent('Texture acquisition', display.EnsureTextures);
     else
         _allowPositionSave = false;
     end
 
     if not ShouldDrawMain() and ShouldHideMainWindow() then
-        display.HideMainWindow();
+        RunPresentComponent('Main window hide', display.HideMainWindow);
     end
-
-    TextureManager.FlushPendingReleases();
-    -- One download step per frame so /vd update still progresses without packet traffic.
-    updater.TickUpdate();
-    updater.TickLoginCheck();
 
     if ShouldDrawMain() then
         local menuHidden = _presentMenuOpen;
         local chatHidden = _presentChatOpen;
 
         if not menuHidden and not chatHidden then
-            if pendingWeatherRead and os.time() >= pendingWeatherTime then
-                pendingWeatherRead = false;
-                local w = ReadWeatherFromMemory();
-                if w ~= nil then weatherId = w; end
-            end
-
-            local ok, err = pcall(function()
+            RunPresentComponent('Main window draw', function()
                 display.DrawWindow(weatherId);
             end);
-            if not ok then
-                VanaDialPrint('Draw error: ' .. tostring(err));
-            end
         elseif ShouldHideMainWindow() then
-            display.HideMainWindow();
+            RunPresentComponent('Main window hide', display.HideMainWindow);
         end
     end
 
+    -- Sunbreeze Racing is toggled independently from the main Vana'Dial window,
+    -- but follows the same in-world and menu/chat visibility gates.
+    if inWorldDraw and sunbreeze.IsOpen()
+        and not _presentMenuOpen and not _presentChatOpen then
+        RunPresentComponent('Sunbreeze window draw', sunbreeze.Draw);
+    end
+
     if _configOpen then
-        local ok, err = pcall(function()
+        RunPresentComponent('Config window draw', function()
             config.Draw(_configOpen, function(open)
                 if _configOpen and not open then
-                    -- Flush debounced window position when settings close.
+                    -- Request an immediate retryable save after this frame.
                     if _settingsDirty then
-                        _settingsDirty = false;
-                        SaveVanaDialSettings();
+                        _settingsDirtyAt = 0;
                     end
                 end
                 _configOpen = open;
             end);
         end);
-        if not ok then
-            VanaDialPrint('Config draw error: ' .. tostring(err));
-        end
     end
 
     -- Debounced persistence: write the dragged window position to disk ~0.75s
     -- after the last movement, so positions survive reload without saving on
     -- every frame of a drag.
-    if _settingsDirty and (os.clock() - _settingsDirtyAt) > 0.75 then
-        _settingsDirty = false;
-        SaveVanaDialSettings();
+    if _settingsDirty and (MonotonicMs() - _settingsDirtyAt) > 750 then
+        local saved = RunPresentComponent('Settings save', SaveVanaDialSettings);
+        if saved then
+            _settingsDirty = false;
+        end
+    end
+end
+
+local _lastPresentFatalLog = -60000;
+ashita.events.register('d3d_present', 'vd_present', function()
+    local ok, err = xpcall(PresentFrame, Traceback);
+    if not ok then
+        local now = MonotonicMs();
+        if now - _lastPresentFatalLog >= 30000 then
+            _lastPresentFatalLog = now;
+            pcall(VanaDialPrint, 'PRESENT contained an unexpected error: ' .. tostring(err));
+        end
     end
 end);
 
 ashita.events.register('zone_change', 'vd_zone_change', function()
     BeginZoning();
+    TextureManager.ResetD3D8Device();
+    SchedulePointerResolve(2);
 end);
 
 ashita.events.register('packet_in', 'vd_packet', function(e)
-    updater.TickLoginCheck();
-
     if e.id == 0x000A then
         BeginZoning();
         ResetWeatherState();
-        _pGameMenu = nil;
-        _gameMenuFailed = false;
-        _pChatExpanded = nil;
-        _chatExpandedFailed = false;
-        pendingWeatherRead = true;
-        pendingWeatherTime = os.time() + 2;
+        TextureManager.ResetD3D8Device();
+        SchedulePointerResolve(2);
         return;
     end
     if e.id == 0x057 then
@@ -803,6 +902,11 @@ ashita.events.register('command', 'vd_command', function(e)
         hidden = false;
         popups.OpenTimersSection('vdlunar');
 
+    elseif sub == 'sunbreezerace' then
+        local opened = sunbreeze.Toggle();
+        VanaDialPrint(opened and 'Sunbreeze Racing window shown.'
+            or 'Sunbreeze Racing window hidden.');
+
     elseif sub == 'show' then
         hidden = false;
         _wasInWorldDraw = false;
@@ -813,8 +917,9 @@ ashita.events.register('command', 'vd_command', function(e)
         if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
         gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
         gConfig.appliedPositions = {};
+        sunbreeze.ResetPosition();
         SaveVanaDialSettings();
-        VanaDialPrint('Position reset to (100, 100).');
+        VanaDialPrint("Vana'Dial and Sunbreeze Racing positions reset.");
 
     elseif sub == 'update' then
         updater.RunUpdate();
@@ -833,7 +938,8 @@ ashita.events.register('command', 'vd_command', function(e)
         VanaDialPrint('  /vd barge         - Toggle Carpenters\' Landing barge timers');
         VanaDialPrint('  /vd rse           - Toggle RSE timers (vtrse ok)');
         VanaDialPrint('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
-        VanaDialPrint('  /vd reset         - Reset window position');
+        VanaDialPrint('  /vd sunbreezerace - Toggle Sunbreeze Racing window');
+        VanaDialPrint('  /vd reset         - Reset both standalone window positions');
         VanaDialPrint('  /vd update        - Download latest from GitHub');
         VanaDialPrint('  /vd checkupdate   - Check GitHub for updates');
         VanaDialPrint('  /vanadial         - Alias for /vd');

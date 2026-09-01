@@ -21,6 +21,10 @@ local memoryLib = require('libs.memory');
 
 local M = {};
 
+function M.ResetD3D8Device()
+    memoryLib.ResetD3D8Device();
+end
+
 -- ============================================
 -- Category Configuration
 -- ============================================

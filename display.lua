@@ -21,6 +21,7 @@ local colorLib = require('libs.color');
 
 local TextureManager = require('libs.texturemanager');
 local windowbg       = require('libs.windowbackground');
+local Safe           = require('libs.imgui_safe');
 local timers         = require('timers');
 local data           = require('data');
 local popups         = require('popups');
@@ -46,6 +47,19 @@ local moonUpTex         = nil;
 local moonDownTex       = nil;
 local clockIconTex      = nil;
 local gearIconTex       = nil;
+local nextTextureRetryMs = 0;
+
+local function TexturesReady()
+    if not arrowRightTex or not moonUpTex or not moonDownTex
+        or not clockIconTex or not gearIconTex
+        or not todTextures.day or not todTextures.night or not todTextures.deadOfNight then
+        return false;
+    end
+    for i = 0, 11 do
+        if not textures[i] or not moonPhaseTextures[i] then return false; end
+    end
+    return true;
+end
 
 local function LoadTextures()
     for i = 0, 11 do
@@ -215,8 +229,13 @@ local lastFontSize = -1;
 -- Full bright/dim cycle for new/full moon % text (and weather-test preview pulse).
 local MOON_PULSE_PERIOD = 2.8;
 
+local function NowSeconds()
+    local ms = data.GetTickMs and data.GetTickMs() or nil;
+    return ms and (ms / 1000) or os.clock();
+end
+
 local function GetMoonPulse(now)
-    now = now or os.clock();
+    now = now or NowSeconds();
     local raw = (math.sin(now * (2 * math.pi / MOON_PULSE_PERIOD)) + 1) * 0.5;
     return math.floor(raw * 24 + 0.5) / 24;
 end
@@ -471,13 +490,14 @@ local function DrawDayColumnTooltipWindow()
         or  (mainWinPos.y - 4);
     local pivotY    = (direction == 'below') and 0.0 or 1.0;
 
+    local ok, err = Safe.Run(function(scope)
     imgui.SetNextWindowBgAlpha(0.92);
     imgui.SetNextWindowPos({anchorX, anchorY}, ImGuiCond_Always, {0.5, pivotY});
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 8});
+    scope:PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0);
+    scope:PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 8});
 
-    local began = imgui.Begin("##VanaDialDayTip", true, TIP_WIN_FLAGS);
-    if began then
+    local visible = scope:BeginWindow("##VanaDialDayTip", true, TIP_WIN_FLAGS);
+    if visible then
         imgui.TextColored(COL_TIP_GOLD, dayName);
         imgui.Text(string.format('%s  (%d%%)', phaseName, moonPercent));
 
@@ -511,8 +531,8 @@ local function DrawDayColumnTooltipWindow()
             end
         end
     end
-    if began then imgui.End(); end
-    imgui.PopStyleVar(2);
+    end);
+    if not ok then error(err); end
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
@@ -529,6 +549,15 @@ function M.Initialize()
         todTextures       = todTextures,
         GetTexPtr         = GetTexPtr,
     });
+end
+
+function M.EnsureTextures()
+    if TexturesReady() then return true; end
+    local now = data.GetTickMs and data.GetTickMs() or 0;
+    if now < nextTextureRetryMs then return false; end
+    nextTextureRetryMs = now + 1000;
+    LoadTextures();
+    return TexturesReady();
 end
 
 function M.Reset()
@@ -559,6 +588,7 @@ function M.Cleanup()
     moonDownTex       = nil;
     clockIconTex      = nil;
     gearIconTex       = nil;
+    nextTextureRetryMs = 0;
     popups.SetTimersOpen(false);
 end
 
@@ -571,9 +601,10 @@ function M.HideMainWindow()
         ImGuiWindowFlags_NoInputs,
         ImGuiWindowFlags_NoBackground
     );
-    if imgui.Begin("Vana'Dial##standalone", true, flags) then
-        imgui.End();
-    end
+    local ok, err = Safe.Run(function(scope)
+        scope:BeginWindow("Vana'Dial##standalone", true, flags);
+    end);
+    if not ok then error(err); end
     -- Clear once per hide stretch so the next draw re-applies saved position.
     if not _mainWindowParked then
         _mainWindowParked = true;
@@ -598,9 +629,10 @@ function M.StageMainWindowPosition()
         ImGuiWindowFlags_NoInputs,
         ImGuiWindowFlags_NoBackground
     );
-    if imgui.Begin("Vana'Dial##standalone", true, flags) then
-        imgui.End();
-    end
+    local ok, err = Safe.Run(function(scope)
+        scope:BeginWindow("Vana'Dial##standalone", true, flags);
+    end);
+    if not ok then error(err); end
     if not cfg.appliedPositions then cfg.appliedPositions = T{}; end
     cfg.appliedPositions['VanaDial'] = true;
     return true;
@@ -702,15 +734,14 @@ function M.DrawWindow(weatherId)
     -- ── Window open ──────────────────────────────────────────────────────────
     local windowFlags = GetBaseWindowFlags(cfg.lockPositions);
 
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
-    imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, {colPad, colPad});
+    local ok, err = Safe.Run(function(scope)
+    scope:PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
+    scope:PushStyleVar(ImGuiStyleVar_WindowPadding, {colPad, colPad});
 
     ApplyWindowPosition('VanaDial');
 
-    local began = false;
-    local ok, err = pcall(function()
-    began = imgui.Begin("Vana'Dial##standalone", true, windowFlags);
-    if began then
+    local visible = scope:BeginWindow("Vana'Dial##standalone", true, windowFlags);
+    if visible then
         SaveWindowPosition('VanaDial');
 
         local wx, wy = imgui.GetWindowPos();
@@ -1025,19 +1056,13 @@ function M.DrawWindow(weatherId)
                 end
             end
         end
-    end -- began
-    end); -- pcall
-    if began then imgui.End(); end
-    imgui.PopStyleVar(2);
+    end -- visible
+    end);
     if not ok then
-        VanaDialPrint('Draw error: ' .. tostring(err));
-        return;
+        error(err);
     end
 
-    local tipOk, tipErr = pcall(DrawDayColumnTooltipWindow);
-    if not tipOk then
-        VanaDialPrint('Tooltip error: ' .. tostring(tipErr));
-    end
+    DrawDayColumnTooltipWindow();
 
     -- ── Popup stacking offsets ────────────────────────────────────────────────
     local todEnabled    = cfg.vanaTimeTodPopup == true;
@@ -1045,7 +1070,7 @@ function M.DrawWindow(weatherId)
     local weatherTestId    = nil;
     local weatherTestAlpha = 1.0;
     if cfg.vanaTimeShowWeather ~= false and cfg.vanaTimeWeatherHideNonElemental then
-        if os.clock() < (_G.XIUI_weatherTestExpiry or 0) then
+        if NowSeconds() < (_G.XIUI_weatherTestExpiry or 0) then
             weatherTestId    = 4;  -- Hot Spell / Fire (first elemental in HorizonXI ordering)
             weatherTestAlpha = 0.35 + 0.65 * GetMoonPulse();
         end

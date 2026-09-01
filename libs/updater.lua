@@ -1,31 +1,35 @@
 --[[
-* Vana'Dial — GitHub raw download updater (same pattern as Anglin).
-* Fetches addon.version from main, downloads listed files over HTTPS, overwrites in place.
+* Vana'Dial resilient GitHub updater.
+*
+* Work is scheduled outside d3d_present. Every file is fetched from one pinned
+* Git commit, syntax-checked, and staged before installation. A transaction
+* journal and verified backups allow automatic recovery after write failure or
+* interruption.
 ]]--
 
 local M = {};
 
 local https     = require('socket.ssl.https');
 local http      = require('socket.http');
+local ltn12     = require('ltn12');
 local chatprint = require('libs.chatprint');
-http.TIMEOUT = 15;
+http.TIMEOUT = 8;
 
-local RAW_BASE = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/main/';
+local REPO_API = 'https://api.github.com/repos/ferrisaj87/vanadial/commits/main';
+local RAW_ROOT = 'https://raw.githubusercontent.com/ferrisaj87/vanadial/';
+local RETRY_DELAYS = { 2, 5, 15 };
 
-local UPDATE_VERSION_URL = RAW_BASE .. 'vanadial.lua';
-
--- Login update check runs after the HorizonXI welcome line in chat (see vanadial.lua text_in).
-
--- All runtime Lua files shipped with the addon (relative to addons/vanadial/).
 local UPDATE_RELATIVE = {
     'vanadial.lua',
     'display.lua',
     'popups.lua',
     'config.lua',
     'timers.lua',
+    'sunbreeze.lua',
     'data.lua',
     'libs/color.lua',
     'libs/imgui_compat.lua',
+    'libs/imgui_safe.lua',
     'libs/texturemanager.lua',
     'libs/imtext.lua',
     'libs/windowbackground.lua',
@@ -34,35 +38,59 @@ local UPDATE_RELATIVE = {
     'libs/updater.lua',
 };
 
-local _version             = '0.0.0';
-local _loginCheckDone      = false;
-local _loginCheckPending   = false;
-local _loginCheckAt        = nil;
-local LOGIN_CHECK_DELAY_SEC = 0.25;
-
--- Incremental download state (one HTTPS fetch per packet_in tick).
+local _version = '0.0.0';
+local _loginCheckDone = false;
+local _checkActive = false;
 local _updateJob = nil;
-local _updateTickAt = -1;
-
+local _generation = 0;
+local _addonRoot = nil;
+local _journalPath = nil;
 local UPDATE_FILES = {};
+local FILES_BY_RELATIVE = {};
+
+local function PrintMsg(msg)
+    pcall(chatprint.Print, msg);
+end
+
+local function Traceback(err)
+    if debug and debug.traceback then
+        return debug.traceback(tostring(err), 2);
+    end
+    return tostring(err);
+end
+
+local function Schedule(delay, fn)
+    local ok, err = pcall(function()
+        ashita.tasks.once(delay or 0, function()
+            local runOk, runErr = xpcall(fn, Traceback);
+            if not runOk then
+                _checkActive = false;
+                _updateJob = nil;
+                PrintMsg('Updater stopped safely: ' .. tostring(runErr));
+            end
+        end);
+    end);
+    if not ok then
+        PrintMsg('Could not schedule updater work: ' .. tostring(err));
+    end
+    return ok;
+end
 
 local function BuildUpdateFiles()
     local root = AshitaCore:GetInstallPath() or '';
-    local addonRoot = (root .. 'addons\\vanadial\\'):gsub('[\\/]+$', '') .. '\\';
+    _addonRoot = (root .. 'addons\\vanadial\\'):gsub('[\\/]+$', '') .. '\\';
+    _journalPath = _addonRoot .. '.vd-update-journal';
     UPDATE_FILES = {};
+    FILES_BY_RELATIVE = {};
     for _, rel in ipairs(UPDATE_RELATIVE) do
-        local urlPath = rel:gsub('\\', '/');
-        UPDATE_FILES[#UPDATE_FILES + 1] = {
-            url   = RAW_BASE .. urlPath,
-            path  = addonRoot .. rel:gsub('/', '\\'),
-            label = rel:gsub('\\', '/'),
+        local entry = {
+            relative = rel,
+            path = _addonRoot .. rel:gsub('/', '\\'),
         };
+        UPDATE_FILES[#UPDATE_FILES + 1] = entry;
+        FILES_BY_RELATIVE[rel] = entry;
     end
 end
-
-BuildUpdateFiles();
-
--- ── Version helpers ─────────────────────────────────────────────────────────────
 
 local function ParseVersion(ver)
     local parts = {};
@@ -73,135 +101,357 @@ local function ParseVersion(ver)
 end
 
 local function VersionGreater(a, b)
-    local pa = ParseVersion(a);
-    local pb = ParseVersion(b);
+    local pa, pb = ParseVersion(a), ParseVersion(b);
     for i = 1, math.max(#pa, #pb) do
-        local ai = pa[i] or 0;
-        local bi = pb[i] or 0;
+        local ai, bi = pa[i] or 0, pb[i] or 0;
         if ai > bi then return true; end
         if ai < bi then return false; end
     end
     return false;
 end
 
-function M.IsNewer(remote, localVer)
-    return VersionGreater(remote, localVer);
-end
-
--- FFXI chat is not UTF-8; strip non-ASCII so glyphs do not become garbage.
-
-local function PrintMsg(msg)
-    chatprint.Print(msg);
-end
-
 local function ParseVersionFromBody(body)
     if not body then return nil; end
-    local remote = body:match("addon%.version%s*=%s*'([^']+)'");
-    if not remote then
-        remote = body:match('addon%.version%s*=%s*"([^"]+)"');
+    return body:match("addon%.version%s*=%s*'([^']+)'")
+        or body:match('addon%.version%s*=%s*"([^"]+)"');
+end
+
+local function ReadFile(path)
+    local f = io.open(path, 'rb');
+    if not f then return nil; end
+    local ok, body = pcall(function() return f:read('*a'); end);
+    pcall(function() f:close(); end);
+    return ok and body or nil;
+end
+
+local function WriteFile(path, body)
+    local f, openErr = io.open(path, 'wb');
+    if not f then return false, openErr; end
+    local writeOk, writeErr = pcall(function()
+        f:write(body);
+        f:flush();
+    end);
+    local closeOk, closeErr = pcall(function() f:close(); end);
+    if not writeOk then return false, writeErr; end
+    if not closeOk then return false, closeErr; end
+    if ReadFile(path) ~= body then return false, 'verification failed'; end
+    return true;
+end
+
+local function RemoveFile(path)
+    local existing = ReadFile(path);
+    if existing == nil then return true; end
+    local ok = pcall(os.remove, path);
+    return ok and ReadFile(path) == nil;
+end
+
+local function CleanupArtifacts(removeBackups)
+    for _, f in ipairs(UPDATE_FILES) do
+        RemoveFile(f.path .. '.vdtmp');
+        if removeBackups then RemoveFile(f.path .. '.vdbak'); end
     end
-    return remote;
 end
 
 local function FetchUrl(url)
-    return pcall(function()
-        return https.request(url .. '?t=' .. os.time());
+    local chunks = {};
+    local ok, result, code = pcall(function()
+        return https.request({
+            url = url .. (url:find('?', 1, true) and '&' or '?') .. 't=' .. os.time(),
+            method = 'GET',
+            headers = {
+                ['User-Agent'] = 'VanaDial-Ashita-Updater',
+                ['Accept'] = 'application/vnd.github+json',
+            },
+            sink = ltn12.sink.table(chunks),
+        });
+    end);
+    local body = table.concat(chunks);
+    if not ok or not result or tonumber(code) ~= 200 or body == '' then
+        return nil, code;
+    end
+    if body:find('<!DOCTYPE', 1, true) or body:find('<html', 1, true) then
+        return nil, 'invalid response';
+    end
+    return body, 200;
+end
+
+local function RetryFetch(url, attempt, callback)
+    local body, code = FetchUrl(url);
+    if body then
+        callback(body);
+        return;
+    end
+    if attempt <= #RETRY_DELAYS then
+        local delay = RETRY_DELAYS[attempt];
+        if Schedule(delay, function() RetryFetch(url, attempt + 1, callback); end) then
+            return;
+        end
+        code = 'retry scheduling failed';
+    end
+    callback(nil, code);
+end
+
+local function ValidateLua(relative, body)
+    if type(body) ~= 'string' or body == '' then return false, 'empty file'; end
+    if relative:sub(-4) == '.lua' then
+        local chunk, err = loadstring(body, '@' .. relative);
+        if not chunk then return false, err; end
+    end
+    return true;
+end
+
+local function GetLocalVersion()
+    local body = UPDATE_FILES[1] and ReadFile(UPDATE_FILES[1].path) or nil;
+    return ParseVersionFromBody(body) or _version;
+end
+
+local function ParseJournal(body)
+    local entries = {};
+    for line in tostring(body or ''):gmatch('[^\r\n]+') do
+        local originalFlag, relative = line:match('^([01])|(.+)$');
+        local file = relative and FILES_BY_RELATIVE[relative] or nil;
+        if not file then return nil, 'invalid journal entry'; end
+        entries[#entries + 1] = {
+            file = file,
+            hadOriginal = originalFlag == '1',
+        };
+    end
+    if #entries ~= #UPDATE_FILES then return nil, 'incomplete journal'; end
+    return entries;
+end
+
+local function RestoreEntries(entries)
+    local restored = true;
+    for _, entry in ipairs(entries) do
+        local path = entry.file.path;
+        if entry.hadOriginal then
+            local backup = ReadFile(path .. '.vdbak');
+            local ok = backup ~= nil and WriteFile(path, backup);
+            if not ok then restored = false; end
+        elseif not RemoveFile(path) then
+            restored = false;
+        end
+    end
+    return restored;
+end
+
+local function RecoverInterruptedTransaction()
+    local body = ReadFile(_journalPath);
+    if not body then
+        CleanupArtifacts(true);
+        return true, false;
+    end
+    local entries = ParseJournal(body);
+    if not entries or not RestoreEntries(entries) then
+        PrintMsg('Update recovery needs attention; backups were preserved.');
+        return false, false;
+    end
+    if not RemoveFile(_journalPath) then
+        PrintMsg('Update files were restored, but the recovery journal could not be removed; backups were preserved.');
+        return false, false;
+    end
+    CleanupArtifacts(true);
+    PrintMsg('Recovered the previous Vana\'Dial version after an interrupted update.');
+    return true, true;
+end
+
+local function FinishUpdate(success, message, preserveRecovery)
+    if not preserveRecovery then
+        if ReadFile(_journalPath) ~= nil and not RemoveFile(_journalPath) then
+            preserveRecovery = true;
+            success = false;
+            message = 'Could not finalize the update journal; backups were preserved for recovery.';
+        else
+            CleanupArtifacts(true);
+        end
+    end
+    _updateJob = nil;
+    if message then PrintMsg(message); end
+    if success then
+        PrintMsg('Update installed safely. Use /addon reload vanadial to load it.');
+    end
+end
+
+local function AbortCommit(job, message)
+    local restored = RestoreEntries(job.entries);
+    if restored then
+        FinishUpdate(false, message .. ' Previous files were restored.', false);
+    else
+        FinishUpdate(false, message .. ' Automatic recovery was incomplete; backups were preserved.', true);
+    end
+end
+
+local function CommitStaged(job)
+    job.entries = {};
+    local journalLines = {};
+
+    -- Back up every original before changing any live file.
+    for _, f in ipairs(UPDATE_FILES) do
+        local original = ReadFile(f.path);
+        local hadOriginal = original ~= nil;
+        if hadOriginal then
+            local ok, err = WriteFile(f.path .. '.vdbak', original);
+            if not ok then
+                FinishUpdate(false, 'Update aborted while creating backups: ' .. tostring(err), false);
+                return;
+            end
+        end
+        job.entries[#job.entries + 1] = { file = f, hadOriginal = hadOriginal };
+        journalLines[#journalLines + 1] = (hadOriginal and '1|' or '0|') .. f.relative;
+    end
+
+    local journalOk, journalErr = WriteFile(_journalPath, table.concat(journalLines, '\n'));
+    if not journalOk then
+        FinishUpdate(false, 'Update aborted before commit: ' .. tostring(journalErr), false);
+        return;
+    end
+
+    -- Install the entrypoint last so it cannot advertise the new version before
+    -- all supporting modules are present.
+    local order = {};
+    for i = 2, #UPDATE_FILES do order[#order + 1] = UPDATE_FILES[i]; end
+    order[#order + 1] = UPDATE_FILES[1];
+
+    for _, f in ipairs(order) do
+        local staged = ReadFile(f.path .. '.vdtmp');
+        if not staged then
+            AbortCommit(job, 'A staged file disappeared during commit.');
+            return;
+        end
+        local ok, err = WriteFile(f.path, staged);
+        if not ok then
+            AbortCommit(job, 'Update write failed: ' .. tostring(err));
+            return;
+        end
+    end
+
+    FinishUpdate(true, nil, false);
+end
+
+local function DownloadNext(job)
+    if _updateJob ~= job or job.generation ~= _generation then return; end
+    local f = UPDATE_FILES[job.index];
+    if not f then
+        CommitStaged(job);
+        return;
+    end
+
+    local url = RAW_ROOT .. job.commit .. '/' .. f.relative:gsub('\\', '/');
+    RetryFetch(url, 1, function(body)
+        if _updateJob ~= job then return; end
+        if not body then
+            FinishUpdate(false, 'Download failed after retries; the installed version was not changed.', false);
+            return;
+        end
+        local valid, validationErr = ValidateLua(f.relative, body);
+        if not valid then
+            FinishUpdate(false, 'Downloaded file failed validation: ' .. tostring(validationErr), false);
+            return;
+        end
+        local written, writeErr = WriteFile(f.path .. '.vdtmp', body);
+        if not written then
+            FinishUpdate(false, 'Could not stage update: ' .. tostring(writeErr), false);
+            return;
+        end
+        job.index = job.index + 1;
+        if (job.index % 3) == 0 or job.index > #UPDATE_FILES then
+            PrintMsg(string.format('Staged %d/%d files...', job.index - 1, #UPDATE_FILES));
+        end
+        if not Schedule(0.05, function() DownloadNext(job); end) then
+            FinishUpdate(false, 'Could not schedule the next download; installed files were not changed.', false);
+        end
     end);
 end
 
-local function FetchRemoteVersion()
-    local ok, body, code = FetchUrl(UPDATE_VERSION_URL);
-    if not ok or code ~= 200 or not body then
-        return nil, code;
-    end
-    return ParseVersionFromBody(body), 200;
-end
-
-local _vanadialPath = nil;
-
-local function GetVanadialPath()
-    if not _vanadialPath then
-        local root = AshitaCore:GetInstallPath() or '';
-        _vanadialPath = (root .. 'addons\\vanadial\\vanadial.lua'):gsub('[\\/]+', '\\');
-    end
-    return _vanadialPath;
-end
-
--- Compare against the version in vanadial.lua on disk, not only the in-memory
--- value from addon load (so /vd update after a download does not re-fetch).
-local function GetLocalVersionForUpdate()
-    local f = io.open(GetVanadialPath(), 'rb');
-    if f then
-        local body = f:read('*a');
-        f:close();
-        local diskVer = ParseVersionFromBody(body);
-        if diskVer and diskVer ~= '' then
-            return diskVer;
+local function ResolveRemote(callback)
+    RetryFetch(REPO_API, 1, function(apiBody)
+        local commit = apiBody and apiBody:match('"sha"%s*:%s*"([0-9a-fA-F]+)"') or nil;
+        if not commit or #commit ~= 40 then
+            callback(nil, nil, 'could not pin remote commit');
+            return;
         end
-    end
-    return _version;
+        local versionUrl = RAW_ROOT .. commit .. '/vanadial.lua';
+        RetryFetch(versionUrl, 1, function(versionBody, code)
+            if not versionBody then
+                callback(nil, nil, code);
+                return;
+            end
+            local valid, err = ValidateLua('vanadial.lua', versionBody);
+            if not valid then
+                callback(nil, nil, err);
+                return;
+            end
+            callback(commit, ParseVersionFromBody(versionBody));
+        end);
+    end);
 end
 
--- ── Public API ────────────────────────────────────────────────────────────────
+local function BeginUpdate()
+    ResolveRemote(function(commit, remote)
+        local job = _updateJob;
+        if not job then return; end
+        local localVer = GetLocalVersion();
+        if not commit or not remote then
+            FinishUpdate(false, 'Could not resolve a consistent remote release after retries.', false);
+            return;
+        end
+        if not VersionGreater(remote, localVer) then
+            FinishUpdate(false, string.format("Vana'Dial v%s is up to date!", localVer or '?'), false);
+            return;
+        end
+        job.commit = commit;
+        job.remote = remote;
+        DownloadNext(job);
+    end);
+end
+
+local function BeginVersionCheck(manual)
+    ResolveRemote(function(_, remote)
+        _checkActive = false;
+        local localVer = GetLocalVersion();
+        if not remote then
+            if manual then PrintMsg('Could not check for updates after retries.'); end
+        elseif VersionGreater(remote, localVer) then
+            PrintMsg(string.format(
+                "A new version of Vana'Dial is available (v%s)! /vd update to install it.",
+                remote));
+        elseif manual then
+            PrintMsg(string.format("Vana'Dial v%s is up to date!", localVer or '?'));
+        end
+    end);
+end
 
 function M.Init(version)
     _version = version or _version;
+    BuildUpdateFiles();
+    return RecoverInterruptedTransaction();
 end
 
 function M.GetVersion()
     return _version;
 end
 
-local function NotifyVersionStatus(remote)
-    local localVer = GetLocalVersionForUpdate();
-    if not remote or remote == '' then
-        PrintMsg(string.format("Vana'Dial v%s — could not check GitHub for updates.", localVer or '?'));
-        return;
-    end
-    if localVer and localVer ~= '' and VersionGreater(remote, localVer) then
-        PrintMsg(string.format(
-            "A new version of Vana'Dial is available (v%s)! /vd update to get the latest version!",
-            remote));
-    else
-        PrintMsg(string.format("Vana'Dial v%s is up to date!", localVer or '?'));
-    end
+function M.IsNewer(remote, localVer)
+    return VersionGreater(remote, localVer);
 end
 
--- Armed by the HorizonXI welcome chat line only (see vanadial.lua text_in).
 function M.OnWelcomeChat()
-    _loginCheckDone    = false;
-    _loginCheckPending = true;
-    _loginCheckAt      = os.clock() + LOGIN_CHECK_DELAY_SEC;
-end
-
-function M.TickLoginCheck()
-    if _loginCheckDone or not _loginCheckPending then
-        return;
+    if _loginCheckDone or _checkActive or _updateJob then return; end
+    _loginCheckDone = true;
+    _checkActive = true;
+    if not Schedule(0.25, function() BeginVersionCheck(false); end) then
+        _checkActive = false;
     end
-    if _loginCheckAt and os.clock() < _loginCheckAt then
-        return;
-    end
-    _loginCheckDone    = true;
-    _loginCheckPending = false;
-    _loginCheckAt      = nil;
-
-    pcall(function()
-        NotifyVersionStatus(FetchRemoteVersion());
-    end);
 end
 
 function M.CheckAndNotify(manual)
-    local remote, code = FetchRemoteVersion();
-
-    if not remote then
-        if manual then
-            PrintMsg('Could not check for updates. Try again later.');
-        end
+    if _checkActive or _updateJob then
+        if manual then PrintMsg('An update operation is already running.'); end
         return;
     end
-
-    if manual then
-        NotifyVersionStatus(remote);
+    _checkActive = true;
+    if not Schedule(0, function() BeginVersionCheck(manual == true); end) then
+        _checkActive = false;
     end
 end
 
@@ -210,82 +460,37 @@ function M.IsUpdateInProgress()
 end
 
 function M.RunUpdate()
-    if _updateJob then
-        PrintMsg('Update already in progress.');
+    if _updateJob or _checkActive then
+        PrintMsg('An update operation is already running.');
         return;
     end
-    PrintMsg('Checking for updates...');
-
-    local remote = FetchRemoteVersion();
-    if not remote then
-        PrintMsg('Could not check for updates. Try again later.');
+    if not RecoverInterruptedTransaction() then
+        PrintMsg('Update cannot start until recovery succeeds.');
         return;
     end
-
-    local localVer = GetLocalVersionForUpdate();
-    if not VersionGreater(remote, localVer) then
-        PrintMsg(string.format("Vana'Dial v%s is up to date!", localVer or '?'));
-        return;
-    end
-
+    _generation = _generation + 1;
     _updateJob = {
-        phase  = 'download',
-        index  = 1,
-        total  = #UPDATE_FILES,
-        remote = remote,
+        generation = _generation,
+        index = 1,
+        commit = nil,
+        entries = {},
     };
-    _updateTickAt = -1;
-    PrintMsg("Updating Vana'Dial....");
+    CleanupArtifacts(true);
+    PrintMsg('Checking and staging a consistent update...');
+    if not Schedule(0, BeginUpdate) then
+        _updateJob = nil;
+    end
 end
 
-local function FinishUpdateJob(success)
+function M.Cancel()
+    _generation = _generation + 1;
+    if not ReadFile(_journalPath) then CleanupArtifacts(true); end
     _updateJob = nil;
-    _updateTickAt = -1;
-    if success then
-        PrintMsg('Addon has been successfully updated, use /addon reload vanadial to reload newest version.');
-    else
-        PrintMsg('Update failed. Try again or download from GitHub.');
-    end
+    _checkActive = false;
 end
 
-function M.TickUpdate()
-    if not _updateJob then return; end
-
-    -- Present + packet_in both call this; at most one step per frame time.
-    local now = os.clock();
-    if now == _updateTickAt then return; end
-    _updateTickAt = now;
-
-    local job = _updateJob;
-
-    if job.phase == 'download' then
-        local i = job.index;
-        local f = UPDATE_FILES[i];
-        if not f then
-            FinishUpdateJob(true);
-            return;
-        end
-
-        local fok, fbody, fcode = FetchUrl(f.url);
-        if not fok or fcode ~= 200 or not fbody or fbody == '' then
-            FinishUpdateJob(false);
-            return;
-        end
-
-        local out = io.open(f.path, 'wb');
-        if not out then
-            FinishUpdateJob(false);
-            return;
-        end
-        out:write(fbody);
-        out:close();
-
-        job.index = i + 1;
-        -- Light progress so long downloads do not look frozen.
-        if (i % 3) == 1 or i == job.total then
-            PrintMsg(string.format('Downloading %d/%d...', i, job.total));
-        end
-    end
-end
+-- Compatibility no-ops for callers from older mixed-version installs.
+function M.TickUpdate() end
+function M.TickLoginCheck() end
 
 return M;
