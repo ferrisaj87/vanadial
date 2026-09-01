@@ -421,10 +421,53 @@ local function BeginVersionCheck(manual)
     end);
 end
 
+-- v1.4.30 and older updaters do not know about newly added runtime files.
+-- After they replace the existing manifest, the new updater repairs only those
+-- missing files during addon load, before vanadial.lua requires them. This work
+-- never runs from PRESENT; a failed repair aborts loading and can be retried by
+-- reloading the addon later.
+local function EnsureRuntimeFiles()
+    local missing = {};
+    for _, f in ipairs(UPDATE_FILES) do
+        if ReadFile(f.path) == nil then
+            missing[#missing + 1] = f;
+        end
+    end
+    if #missing == 0 then return true; end
+
+    PrintMsg(string.format('Repairing %d missing runtime file(s)...', #missing));
+    local apiBody, apiErr = FetchUrl(REPO_API);
+    local commit = apiBody and apiBody:match('"sha"%s*:%s*"([0-9a-fA-F]+)"') or nil;
+    if not commit or #commit ~= 40 then
+        return false, apiErr or 'could not pin repair commit';
+    end
+
+    for _, f in ipairs(missing) do
+        local url = RAW_ROOT .. commit .. '/' .. f.relative:gsub('\\', '/');
+        local body, fetchErr = FetchUrl(url);
+        if not body then return false, fetchErr or ('could not fetch ' .. f.relative); end
+        local valid, validationErr = ValidateLua(f.relative, body);
+        if not valid then return false, validationErr; end
+        local written, writeErr = WriteFile(f.path, body);
+        if not written then return false, writeErr; end
+    end
+    PrintMsg('Missing runtime files repaired.');
+    return true;
+end
+
 function M.Init(version)
     _version = version or _version;
     BuildUpdateFiles();
-    return RecoverInterruptedTransaction();
+    local recoveredOk, recovered = RecoverInterruptedTransaction();
+    if not recoveredOk or recovered then
+        return recoveredOk, recovered;
+    end
+    local runtimeOk, runtimeErr = EnsureRuntimeFiles();
+    if not runtimeOk then
+        PrintMsg('Runtime repair failed; reload later to retry: ' .. tostring(runtimeErr));
+        return false, false;
+    end
+    return true, false;
 end
 
 function M.GetVersion()
