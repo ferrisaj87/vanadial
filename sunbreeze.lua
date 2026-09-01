@@ -33,6 +33,8 @@ local COLOR_YELLOW = { 1.000, 0.900, 0.200, 1.00 };
 local COLOR_ORANGE = { 1.000, 0.500, 0.100, 1.00 };
 local COLOR_RED    = { 1.000, 0.150, 0.120, 1.00 };
 local COLOR_RED_DIM = { 0.550, 0.030, 0.020, 1.00 };
+local COLOR_GREEN_DIM = { 0.030, 0.400, 0.080, 1.00 };
+local COLOR_SECTION_BORDER = { 0.800, 0.670, 0.310, 0.85 };
 
 local WIN_FLAGS = bit.bor(
     ImGuiWindowFlags_NoDecoration,
@@ -86,6 +88,21 @@ local function GetCountdownColor(remaining, duration)
         return COLOR_YELLOW;
     end
     return COLOR_GREEN;
+end
+
+local function GetCurrentTimerColor(remaining, duration)
+    local fraction = duration > 0 and (remaining / duration) or 0;
+    if fraction <= 0.05 then
+        local tick = data.GetTickMs and data.GetTickMs() or nil;
+        local bright = tick and (math.floor(tick / 350) % 2 == 0)
+            or (math.floor(os.clock() * 3) % 2 == 0);
+        return bright and COLOR_GREEN or COLOR_GREEN_DIM;
+    elseif fraction <= 0.25 then
+        return COLOR_YELLOW;
+    elseif fraction <= 0.50 then
+        return COLOR_ORANGE;
+    end
+    return COLOR_RED;
 end
 
 local function CenterText(text, color)
@@ -159,16 +176,35 @@ function M.Draw()
 
             local status, nextStatus, remaining, duration =
                 GetScheduleState(data.GetRawTime());
-            local timerColor = GetCountdownColor(remaining, duration);
+            local nextTimerColor = GetCountdownColor(remaining, duration);
+            local currentTimerColor = GetCurrentTimerColor(remaining, duration);
+            local timerText = FormatCountdown(remaining);
 
             CenterText('Sunbreeze Racing', COLOR_GOLD);
             imgui.Separator();
-            CenterText('Current Status', COLOR_LABEL);
+
+            local sectionX, sectionY = imgui.GetCursorScreenPos();
+            local sectionWidth = imgui.GetContentRegionAvail();
+            imgui.Dummy({ 0, math.max(2, math.floor(3 * scale)) });
+            CenterText('Current', COLOR_LABEL);
             CenterText(status, COLOR_WHITE);
+            CenterText(timerText, currentTimerColor);
+            imgui.Dummy({ 0, math.max(2, math.floor(3 * scale)) });
+            local _, sectionBottom = imgui.GetCursorScreenPos();
+            imgui.GetWindowDrawList():AddRect(
+                { sectionX, sectionY },
+                { sectionX + sectionWidth, sectionBottom },
+                imgui.GetColorU32(COLOR_SECTION_BORDER),
+                5 * scale, nil, math.max(1, scale));
+
             imgui.Spacing();
-            imgui.Separator();
+
+            local italicMark = scope:Mark();
+            local italicFont = imtext.GetItalicFont('Arial');
+            if italicFont then scope:PushFont(italicFont, fontSize); end
             CenterText('Next: ' .. nextStatus, COLOR_LABEL);
-            CenterText(FormatCountdown(remaining), timerColor);
+            CenterText(timerText, nextTimerColor);
+            scope:CloseTo(italicMark);
         end
     end);
 

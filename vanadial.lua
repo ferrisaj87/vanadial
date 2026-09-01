@@ -22,7 +22,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.33';
+addon.version = '1.4.34';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -706,9 +706,10 @@ end
 ashita.events.register('load', 'vd_load', function()
     -- Load all fonts NOW, during the load event (outside any d3d_present frame).
     -- imgui.AddFontFromFileTTF mutates the font atlas; doing it mid-frame on the
-    -- Ashita main lineage causes EXCEPTION_ACCESS_VIOLATION. Vana'Dial only uses
-    -- Tahoma, so prewarm just that family (regular + bold).
+    -- Ashita main lineage causes EXCEPTION_ACCESS_VIOLATION. Prewarm the clock
+    -- font plus the event window's italic font before any PRESENT callback.
     imtext.PrewarmFonts({'Tahoma'});
+    imtext.PrewarmItalicFonts({'Arial'});
     display.Initialize();
     local pointersOk, complete = xpcall(ResolveClientPointers, Traceback);
     local w = pointersOk and ReadWeatherFromMemory() or nil;

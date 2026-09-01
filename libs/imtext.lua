@@ -41,7 +41,7 @@ local pos = {0, 0};
 
 local fontFamilyToFile = {
     tahoma                   = { regular = 'tahoma.ttf',   bold = 'tahomabd.ttf' },
-    arial                    = { regular = 'arial.ttf',    bold = 'arialbd.ttf' },
+    arial                    = { regular = 'arial.ttf',    bold = 'arialbd.ttf', italic = 'ariali.ttf' },
     consolas                 = { regular = 'consola.ttf',  bold = 'consolab.ttf' },
     calibri                  = { regular = 'calibri.ttf',  bold = 'calibrib.ttf' },
     segoeui                  = { regular = 'segoeui.ttf',  bold = 'segoeuib.ttf' },
@@ -98,6 +98,26 @@ local function loadFont(fontFamily, isBold)
         activeFontKey = fontKey;
         print(string.format("[Vana'Dial] Failed to load font: %s (%s)", fontKey, path));
     end
+end
+
+local italicFontCache = {};
+
+local function loadItalicFont(fontFamily)
+    local family = fontFamily or 'Arial';
+    local key = family:lower():gsub('^%s+', ''):gsub('%s+$', '');
+    if italicFontCache[key] ~= nil then return italicFontCache[key] or nil; end
+    local mapping = fontFamilyToFile[key];
+    local fileName = mapping and mapping.italic;
+    if not fileName then
+        italicFontCache[key] = false;
+        return nil;
+    end
+    local path = 'C:\\Windows\\Fonts\\' .. fileName;
+    local ok, result = pcall(function()
+        return imgui.AddFontFromFileTTF(path, 20.0);
+    end);
+    italicFontCache[key] = (ok and result) or false;
+    return italicFontCache[key] or nil;
 end
 
 local function getLineHeight()
@@ -171,6 +191,21 @@ function M.PrewarmFonts(families)
     end
     activeFont = nil;
     activeFontKey = '';
+end
+
+-- Italic fonts are kept separate from the active clock font. They must also be
+-- prewarmed during load so the atlas is never modified from d3d_present.
+function M.PrewarmItalicFonts(families)
+    if type(families) ~= 'table' then return; end
+    for _, family in ipairs(families) do
+        if type(family) == 'string' then loadItalicFont(family); end
+    end
+end
+
+function M.GetItalicFont(fontFamily)
+    local key = (fontFamily or 'Arial'):lower():gsub('^%s+', ''):gsub('%s+$', '');
+    local cached = italicFontCache[key];
+    return cached and cached or nil;
 end
 
 --- Reset transient frame caches (call on settings change).
