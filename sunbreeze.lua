@@ -143,8 +143,8 @@ function M.Draw()
     if not isOpen or not gConfig then return; end
 
     local cfg = gConfig;
-    local scale = math.max(0.5, math.min(2.0, tonumber(cfg.vanaTimeScale) or 1.0));
-    local baseFontSize = math.max(8, math.min(24, tonumber(cfg.vanaTimeFontSize) or 12));
+    local scale = math.max(0.5, math.min(4.0, tonumber(cfg.vanaTimeScale) or 1.0));
+    local baseFontSize = math.max(8, math.min(48, tonumber(cfg.vanaTimeFontSize) or 12));
     local fontSize = math.floor(baseFontSize * scale);
     local paddingX = math.floor(12 * scale);
     local paddingY = math.floor(10 * scale);

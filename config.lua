@@ -270,13 +270,13 @@ function M.Draw(openFlag, setOpen)
             -- Scaling & Layout
             if imgui.CollapsingHeader('Scaling & Layout##vt', ImGuiTreeNodeFlags_DefaultOpen) then
                 imgui.Indent(12);
-                SF('Scale##vt',     'vanaTimeScale',    0.5, 2.0, '%.2f', 1.0);
+                SF('Scale##vt',     'vanaTimeScale',    0.5, 4.0, '%.2f', 1.0);
                 Tip("Global scale for the entire Vana'Dial window. Double right-click to reset.");
-                SI('Font Size##vt', 'vanaTimeFontSize',  8, 24, 12);
+                SI('Font Size##vt', 'vanaTimeFontSize',  8, 48, 12);
                 Tip("Font size for clock and moon phase text. Double right-click to reset.");
                 CB('Bold Font##vt', 'vanaTimeFontBold');
                 Tip('Use Tahoma Bold for clock text (matches XIUI default fontWeight). Turn off if your XIUI global font is Normal.');
-                SI('Icon Size##vt', 'vanaTimeIconSize',  16, 64, 28);
+                SI('Icon Size##vt', 'vanaTimeIconSize',  16, 128, 28);
                 Tip("Size of element day icons in pixels. Double right-click to reset.");
                 imgui.Unindent(12);
             end
@@ -346,7 +346,7 @@ function M.Draw(openFlag, setOpen)
                     Tip('Use a separate icon size for the TOD tab.');
                     if gConfig.vanaTimeTodCustomScale then
                         imgui.Indent(16);
-                        SI('Icon Size##todIcon', 'vanaTimeTodIconSize', 16, 64, 28);
+                        SI('Icon Size##todIcon', 'vanaTimeTodIconSize', 16, 128, 28);
                         Tip('Size of the TOD icon in pixels. Double right-click to reset.');
                         imgui.Unindent(16);
                     end
@@ -397,7 +397,7 @@ function M.Draw(openFlag, setOpen)
                                 and 'Non-Elemental Icon Size##wxIcon'
                                 or  'Icon Size##wxIcon';
                             local v = T{ math.floor(tonumber(gConfig.vanaTimeWeatherIconSize) or 28) };
-                            if imgui.SliderInt(baseLbl, v, 16, 64) then
+                            if imgui.SliderInt(baseLbl, v, 16, 128) then
                                 gConfig.vanaTimeWeatherIconSize = v[1];
                                 SaveVanaDialSettings();
                             end
@@ -415,7 +415,7 @@ function M.Draw(openFlag, setOpen)
                                 and 'Icon Size##wxElemOnly'
                                 or  'Elemental Icon Size##wxElem';
                             local v = T{ math.floor(tonumber(gConfig.vanaTimeWeatherElementalIconSize) or 42) };
-                            if imgui.SliderInt(elemLbl, v, 16, 64) then
+                            if imgui.SliderInt(elemLbl, v, 16, 128) then
                                 gConfig.vanaTimeWeatherElementalIconSize = v[1];
                                 SaveVanaDialSettings();
                             end
@@ -447,7 +447,7 @@ function M.Draw(openFlag, setOpen)
                     imgui.Text('Side:');
                     imgui.SameLine(0, 8);
                     Combo('##vanaTimeTimerSide', 'vanaTimeTimerSide', DIR_LABELS, DIR_VALUES, 'above', COMBO_WIDTH_DIR);
-                    SI('Timers Font Size##vt', 'vanaTimeTimersFontSize', 8, 24, 12);
+                    SI('Timers Font Size##vt', 'vanaTimeTimersFontSize', 8, 48, 12);
                     Tip('Font size inside the timers panel. Double right-click to reset.');
                     imgui.Spacing();
                     CB('Auto-Close on Outside Click', 'vanaTimeTimersAutoCloseClick');

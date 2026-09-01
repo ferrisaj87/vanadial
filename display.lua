@@ -655,9 +655,9 @@ function M.DrawWindow(weatherId)
     imtext.SetConfig('Tahoma', clockBold, 1);
 
     local colorCfg = (cfg.colorCustomization or {}).vanaTime or {};
-    local scale    = math.max(0.5, math.min(2.0, cfg.vanaTimeScale    or 1.0));
-    local fontSize = math.floor(math.max(8,  math.min(24, cfg.vanaTimeFontSize or 12)) * scale);
-    local iconSize = math.floor(math.max(16, math.min(64, cfg.vanaTimeIconSize  or 28)) * scale);
+    local scale    = math.max(0.5, math.min(4.0, cfg.vanaTimeScale    or 1.0));
+    local fontSize = math.floor(math.max(8,  math.min(48,  cfg.vanaTimeFontSize or 12)) * scale);
+    local iconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeIconSize  or 28)) * scale);
     local rounding = 12.0;
 
     -- ── Game data (pure Lua — no FFI) ────────────────────────────────────────
@@ -1112,14 +1112,14 @@ function M.DrawWindow(weatherId)
     -- Per-popup icon sizes
     local todIconSize;
     if cfg.vanaTimeTodCustomScale then
-        todIconSize = math.floor(math.max(16, math.min(64, cfg.vanaTimeTodIconSize or 28)) * scale);
+        todIconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeTodIconSize or 28)) * scale);
     else
         todIconSize = iconSize;
     end
 
     local weatherBaseSize;
     if cfg.vanaTimeWeatherCustomScale then
-        weatherBaseSize = math.floor(math.max(16, math.min(64, cfg.vanaTimeWeatherIconSize or 28)) * scale);
+        weatherBaseSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherIconSize or 28)) * scale);
     else
         weatherBaseSize = iconSize;
     end
@@ -1135,9 +1135,9 @@ function M.DrawWindow(weatherId)
             weatherIconSize = weatherBaseSize;
         elseif isElemental or previewElem then
             if cfg.vanaTimeWeatherCustomScale then
-                weatherIconSize = math.floor(math.max(16, math.min(64, cfg.vanaTimeWeatherElementalIconSize or 42)) * scale);
+                weatherIconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherElementalIconSize or 42)) * scale);
             else
-                weatherIconSize = math.min(math.floor(weatherBaseSize * 1.5), math.floor(64 * scale));
+                weatherIconSize = math.min(math.floor(weatherBaseSize * 1.5), math.floor(128 * scale));
             end
         end
     end
@@ -1151,7 +1151,7 @@ function M.DrawWindow(weatherId)
     end
 
     if showTimers and popups.IsTimersOpen() then
-        local timersFontSize = math.floor(math.max(8, math.min(24, cfg.vanaTimeTimersFontSize or 12)) * scale);
+        local timersFontSize = math.floor(math.max(8, math.min(48, cfg.vanaTimeTimersFontSize or 12)) * scale);
         popups.DrawTimersPopup(timersFontSize, colorCfg, rounding);
     end
 end

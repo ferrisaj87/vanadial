@@ -342,6 +342,7 @@ local COL_BTN        = {0.18, 0.16, 0.12, 0.80};
 local COL_BTN_HOVER  = {0.28, 0.24, 0.14, 0.90};
 local COL_BTN_ACTIVE = {0.35, 0.30, 0.16, 1.0};
 local COL_BTN_TEXT   = {0.76, 0.68, 0.47, 0.85};
+local COL_PILL_BG    = {0.025, 0.025, 0.030, 0.92};
 
 local VAR_WINDOW_PADDING = {12, 8};
 local VAR_FRAME_PADDING  = {6, 4};
@@ -405,8 +406,36 @@ local function DrawCollapseButton()
     if not ok then error(err); end
 end
 
--- One transport route row: Label | Status | Countdown
-local function DrawRouteRow(row)
+-- Countdown-first pill shared by every timer row.
+local function DrawTimerPill(id, text, color)
+    text = text or '--';
+    color = color or timers.colorDimGrey;
+    local textW = imgui.CalcTextSize(text);
+    local textH = imgui.GetTextLineHeight();
+    local minTextW = imgui.CalcTextSize('00m 00s');
+    local padX, padY = 7, 3;
+    local pillW = math.max(textW, minTextW) + padX * 2;
+    local pillH = math.max(textH, imgui.GetTextLineHeight()) + padY * 2;
+    local x, y = imgui.GetCursorScreenPos();
+
+    imgui.InvisibleButton('##vdTimerPill_' .. tostring(id), {pillW, pillH});
+
+    local dl = imgui.GetWindowDrawList();
+    local rounding = pillH * 0.45;
+    dl:AddRectFilled({x, y}, {x + pillW, y + pillH},
+        imgui.GetColorU32(COL_PILL_BG), rounding);
+    dl:AddRect({x, y}, {x + pillW, y + pillH},
+        imgui.GetColorU32(color), rounding, nil, 1.0);
+    dl:AddText(
+        {x + (pillW - textW) * 0.5, y + (pillH - textH) * 0.5},
+        imgui.GetColorU32(color), text);
+end
+
+-- One transport route row: Countdown | Label | Status
+local function DrawRouteRow(row, id)
+    local cdColor = (row.isEmpty or not row.cdColor) and timers.colorDimGrey or row.cdColor;
+    DrawTimerPill(id, row.countdownStr, cdColor);
+    imgui.SameLine(0, 8);
     if row.city1 then
         imgui.TextColored(row.city1Color, row.city1);
         if row.city2 and row.city2 ~= '' then
@@ -428,30 +457,29 @@ local function DrawRouteRow(row)
     else
         imgui.TextColored(timers.colorGoldDark, row.label or '');
     end
-    imgui.SameLine(0, 10);
     if row.isOOS then
+        imgui.SameLine(0, 10);
         imgui.TextColored(COL_OOS, 'Out of Service');
-        imgui.SameLine(0, 10);
     elseif row.isServicedSoon then
+        imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorServicedSoon, 'Serviced Soon');
-        imgui.SameLine(0, 10);
     elseif row.isBoarding then
+        imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorBoarding, 'BOARDING');
-        imgui.SameLine(0, 10);
     elseif row.isTransit then
-        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
         imgui.SameLine(0, 10);
+        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
     end
-    local cdColor = (row.isEmpty or not row.cdColor) and timers.colorDimGrey or row.cdColor;
-    imgui.TextColored(cdColor, row.countdownStr or '--');
 end
 
-local function DrawAirshipLeg(leg, fontScale)
+local function DrawAirshipLeg(leg, fontScale, id)
     local ok, err = Safe.Run(function(scope)
     local font = imgui.GetFont();
     if fontScale and fontScale ~= 1.0 and font then
         scope:PushFont(font, GetFontSizeBase() * fontScale);
     end
+    DrawTimerPill(id, leg.countdownStr, leg.cdColor or timers.colorDimGrey);
+    imgui.SameLine(0, 8);
     if leg.city1 then
         imgui.TextColored(leg.city1Color, leg.city1);
         if leg.city2 and leg.city2 ~= '' then
@@ -463,34 +491,26 @@ local function DrawAirshipLeg(leg, fontScale)
     else
         imgui.TextColored(timers.colorGoldDark, leg.label or '');
     end
-    imgui.SameLine(0, 10);
     if leg.isAwaiting then
+        imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorAwaiting, 'AWAITING ARRIVAL');
-        imgui.SameLine(0, 10);
-        imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
     elseif leg.isBoarding then
+        imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorBoarding, 'BOARDING');
-        imgui.SameLine(0, 10);
-        imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
     elseif leg.isTransit then
-        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorGoldDark, 'Returns in: ');
-        imgui.SameLine(0, 6);
-        imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
-    else
-        imgui.TextColored(leg.cdColor or timers.colorDimGrey, leg.countdownStr or '--');
+        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
     end
     end);
     if not ok then error(err); end
 end
 
-local function DrawAirshipRow(row)
-    DrawAirshipLeg(row, 1.0);
+local function DrawAirshipRow(row, index)
+    DrawAirshipLeg(row, 1.0, 'air_' .. index);
     if row.sub then
         local ok, err = Safe.Run(function(scope)
             scope:Indent(18);
-            DrawAirshipLeg(row.sub, 0.82);
+            DrawAirshipLeg(row.sub, 0.82, 'air_sub_' .. index);
         end);
         if not ok then error(err); end
     end
@@ -499,7 +519,7 @@ end
 local function DrawAirshipsContent()
     local a = timers.airships;
     for i, entry in ipairs(a) do
-        DrawAirshipRow(entry);
+        DrawAirshipRow(entry, i);
         if i < #a then DrawSectionDivider() end
     end
 end
@@ -534,7 +554,7 @@ local function DrawBoatsContent()
             if not headerOk then error(open); end
             groupOpen = open;
         elseif groupOpen then
-            DrawRouteRow(entry);
+            DrawRouteRow(entry, 'boat_' .. i);
             if i < #b and not b[i + 1].isHeader then
                 DrawSectionDivider();
             end
@@ -560,20 +580,19 @@ end
 local function DrawRSEContent()
     local rse = timers.rse;
     for i, e in ipairs(rse) do
+        local pillColor = e.isCurrent and timers.colorSoon or timers.colorWaiting;
+        DrawTimerPill('rse_' .. i, e.countdownStr, pillColor);
+        imgui.SameLine(0, 8);
         if e.isCurrent then
             imgui.TextColored(timers.colorGoldDark,  e.slotName);
             imgui.SameLine(0, 5);
             DrawRSELocation(e.location);
-            imgui.SameLine(0, 10);
-            imgui.TextColored(timers.colorSoon, e.countdownStr .. ' left');
         else
             imgui.TextColored(timers.colorGoldMuted, e.slotName);
             imgui.SameLine(0, 5);
             DrawRSELocation(e.location);
             imgui.SameLine(0, 10);
             imgui.TextColored(timers.colorDimGrey, e.dateStr);
-            imgui.SameLine(0, 10);
-            imgui.TextColored(timers.colorWaiting, e.countdownStr);
         end
         if i < #rse then DrawSectionDivider() end
     end
@@ -598,6 +617,9 @@ local function DrawLunarContent()
         local isNew  = (e.phaseIdx == 0);
         local isFull = (e.phaseIdx == 6);
         local rowX, rowY = imgui.GetCursorScreenPos();
+        local pillColor = e.isCurrent and timers.colorSoon or timers.colorWaiting;
+        DrawTimerPill('lunar_' .. i, e.countdownStr, pillColor);
+        imgui.SameLine(0, 8);
 
         if e.isCurrent then
             DrawPhaseIcon(e.phaseIdx);
@@ -607,16 +629,12 @@ local function DrawLunarContent()
             imgui.TextColored(timers.colorDimGrey, 'ends');
             imgui.SameLine(0, 4);
             imgui.TextColored(timers.colorGrey,    e.dateStr);
-            imgui.SameLine(0, 10);
-            imgui.TextColored(timers.colorSoon,    e.countdownStr);
         else
             DrawPhaseIcon(e.phaseIdx);
             imgui.SameLine(0, 4);
             imgui.TextColored(timers.colorGoldMuted, e.phaseName);
             imgui.SameLine(0, 10);
             imgui.TextColored(timers.colorDimGrey, e.dateStr);
-            imgui.SameLine(0, 10);
-            imgui.TextColored(timers.colorWaiting, e.countdownStr);
         end
 
         -- Blood-red border for New Moon; moonlit-blue border for Full Moon
@@ -674,7 +692,11 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     else
         imgui.SetNextWindowPos({popX, mainWinPos.y + mainWinSize.h + 4}, ImGuiCond_Always);
     end
-    imgui.SetNextWindowSizeConstraints({220, 0}, {600, 9999});
+    local globalScale = math.max(0.5, math.min(4.0, tonumber(cfg.vanaTimeScale) or 1.0));
+    local widthScale = math.max(globalScale, (tonumber(fontSize) or 12) / 12);
+    local minTimerWidth = math.floor(math.max(220, 220 * globalScale));
+    local maxTimerWidth = math.floor(math.max(600, 600 * widthScale));
+    imgui.SetNextWindowSizeConstraints({minTimerWidth, 0}, {maxTimerWidth, 9999});
 
     local visible = scope:BeginWindow("Vana'Dial Timers##standalone", true, WIN_FLAGS_TIMERS);
     if visible then
