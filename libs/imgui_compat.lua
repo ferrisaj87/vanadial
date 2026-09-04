@@ -12,13 +12,12 @@
 *   - ImGuiCol_Tab* constants renamed (TabActive -> TabSelected, etc.)
 *   - ImDrawCornerFlags renamed to ImDrawFlags_RoundCorners*
 *   - BeginDisabled/EndDisabled: exists in 4.3 (ImGui 1.85+), polyfilled for main
-*   - SetWindowFontScale: removed in ImGui 1.92 (Ashita 3.0), polyfilled via PushFont
+*   - SetWindowFontScale: removed in ImGui 1.92 (Ashita 3.0). Do NOT emulate it
+*     with a process-global PushFont stack — that leaks into later addons and
+*     crashes Present (often blamed on equipmon/mobdb/checker).
 ]]--
 
 local imgui = require('imgui');
-
--- Store original functions
-local orig_imgui_BeginChild = imgui.BeginChild;
 
 -- Auto-detect Ashita 4.3 vs main branch based on ImGui constants
 -- 4.3 has ImGuiChildFlags_Borders constant, main branch does not
@@ -61,16 +60,6 @@ if use43 then
         ImGuiCol_TabActive = ImGuiCol_TabSelected;
         ImGuiCol_TabUnfocused = ImGuiCol_TabDimmed;
         ImGuiCol_TabUnfocusedActive = ImGuiCol_TabDimmedSelected;
-    end
-
-    -- BeginChild: Handle boolean->flags conversion for backwards compat
-    imgui.BeginChild = function(id, size, cflags, wflags)
-        if cflags == true then
-            cflags = ImGuiChildFlags_Borders;
-        elseif cflags == false then
-            cflags = ImGuiChildFlags_None;
-        end
-        return orig_imgui_BeginChild(id, size, cflags, wflags);
     end
 
 else
@@ -119,58 +108,24 @@ else
         end
     end
 
-    -- BeginChild: 4.3 changed default cflags behavior
-    -- On main, true = ImGuiChildFlags_Borders, on 4.3 it's more explicit
-    imgui.BeginChild = function(id, size, cflags, wflags)
-        return orig_imgui_BeginChild(id, size, cflags == true and ImGuiChildFlags_Borders or ImGuiChildFlags_None, wflags);
-    end
-
     -- PushStyleColor wrapper removed - all constants now guaranteed to exist via fallbacks above
     -- This ensures push/pop counts always match
 
 end
 
--- SetWindowFontScale was removed in ImGui 1.92 (Ashita 3.0).
--- Emulate per-window font scale via PushFont(font, FontSizeBase * scale).
-if imgui.SetWindowFontScale == nil then
-    local fontScalePushDepth = 0;
-
-    local function GetFontSizeBase()
-        local style = imgui.GetStyle();
-        if style and style.FontSizeBase and style.FontSizeBase > 0 then
-            return style.FontSizeBase;
-        end
-        local sz = imgui.GetFontSize();
-        if sz and sz > 1 then
-            return sz;
-        end
-        return 13;
-    end
-
-    imgui.SetWindowFontScale = function(scale)
-        if not scale or scale <= 0 then
-            scale = 1.0;
-        end
-
-        while fontScalePushDepth > 0 do
-            imgui.PopFont();
-            fontScalePushDepth = fontScalePushDepth - 1;
-        end
-
-        if scale ~= 1.0 then
-            local font = imgui.GetFont();
-            if not font then
-                return;
-            end
-            imgui.PushFont(font, GetFontSizeBase() * scale);
-            fontScalePushDepth = 1;
-        end
-    end
+-- SetWindowFontScale was removed in ImGui 1.92. A previous vanadial polyfill
+-- emulated it with a process-global PushFont that was not popped at window End,
+-- so later addons AVed in Present. Replace that (or a missing API) with a no-op.
+if not rawget(_G, '_VANADIAL_FONTSCALE_NOOP') then
+    imgui.SetWindowFontScale = function(_scale) end;
+    _G._VANADIAL_FONTSCALE_NOOP = true;
 end
 
--- ImGui 1.92 requires PushFont(font, size). Wrap legacy single-arg callers.
-if imgui.PushFont then
-    local orig_imgui_PushFont = imgui.PushFont;
+-- If a previous vanadial load wrapped PushFont and returned without pushing
+-- when font was nil, callers still PopFont and corrupt later addons. Re-wrap
+-- once so a push always happens.
+if imgui.PushFont and not rawget(_G, '_VANADIAL_PUSHFONT_SAFE') then
+    local currentPushFont = imgui.PushFont;
     imgui.PushFont = function(font, size)
         if size == nil then
             local style = imgui.GetStyle();
@@ -183,11 +138,9 @@ if imgui.PushFont then
         if font == nil then
             font = imgui.GetFont();
         end
-        if not font then
-            return;
-        end
-        return orig_imgui_PushFont(font, size);
+        return currentPushFont(font, size);
     end
+    _G._VANADIAL_PUSHFONT_SAFE = true;
 end
 
 -- Tab color renames (ImGui 1.90+) — apply whenever new names exist, any branch.

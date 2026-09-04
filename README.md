@@ -6,6 +6,20 @@
 
 Standalone Ashita v4 addon for Horizon XI / FFXI: Vana'diel time, elemental days, moon phase, zone weather, and transport timers (airships, boats, RSE, lunar).
 
+## Screenshots
+
+Day columns, moon phase, and Fenrir / Selene tooltip:
+
+<img src="docs/example-moon-tooltip.png" alt="Vana'Dial moon phase and Fenrir tooltip" width="720">
+
+Airship, boat, RSE, and lunar timers:
+
+<img src="docs/example-timers.png" alt="Vana'Dial airship timer panel" width="720">
+
+In-game settings (`/vd config`):
+
+<img src="docs/example-settings.png" alt="Vana'Dial settings window" width="720">
+
 ## Install
 
 Clone or copy this folder into your Ashita `addons` directory:

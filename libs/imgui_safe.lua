@@ -69,7 +69,26 @@ function Scope:BeginWindow(name, open, flags)
 end
 
 function Scope:BeginTooltip()
-    imgui.BeginTooltip();
+    local visible = imgui.BeginTooltip();
+    if visible == false then
+        return false;
+    end
+    self:Defer(function() imgui.EndTooltip(); end);
+    return true;
+end
+
+function Scope:BeginItemTooltip()
+    local visible;
+    if imgui.BeginItemTooltip then
+        visible = imgui.BeginItemTooltip();
+    elseif imgui.IsItemHovered() then
+        visible = imgui.BeginTooltip();
+    else
+        return false;
+    end
+    if visible == false then
+        return false;
+    end
     self:Defer(function() imgui.EndTooltip(); end);
     return true;
 end

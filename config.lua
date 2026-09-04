@@ -22,13 +22,13 @@ end
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 
 local function Tip(text)
-    if imgui.IsItemHovered() then
-        local mark = activeScope:Mark();
-        activeScope:BeginTooltip();
+    if not activeScope then return; end
+    local mark = activeScope:Mark();
+    if activeScope:BeginItemTooltip() then
         activeScope:PushTextWrapPos(imgui.GetFontSize() * 28);
         imgui.TextUnformatted(text);
-        activeScope:CloseTo(mark);
     end
+    activeScope:CloseTo(mark);
 end
 
 -- Checkbox bound to gConfig[key]. Returns true when value changed.

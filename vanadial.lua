@@ -22,7 +22,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.37';
+addon.version = '1.4.38';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -173,30 +173,60 @@ local function MigrateWindowSettings()
     return changed;
 end
 
--- Debounced settings persistence. SaveWindowPosition() runs every frame while a
--- window is dragged, so we never write to disk inline — instead we flag the
--- settings dirty and flush once movement has settled (see the d3d_present
--- handler). This keeps drag positions across reloads without thrashing disk I/O.
+-- Debounced settings persistence. Widget changes and window drags only mark
+-- dirty during Present; the actual settings.save() runs on a short task so
+-- serialization / file I/O / GC cannot collect D3D textures still queued in
+-- this frame's ImGui draw lists (that AV is often blamed on the next addon).
 local _settingsDirty      = false;
 local _settingsDirtyAt    = 0;
 local _allowPositionSave  = false;
+local _inPresentFrame     = false;
+local _saveTaskPending    = false;
+local _addonAlive         = true;
 
 local function MarkSettingsDirty()
     _settingsDirty   = true;
     _settingsDirtyAt = MonotonicMs();
 end
 
--- Never persist appliedPositions (session-only; corrupts re-apply on reload).
-function SaveVanaDialSettings()
+local function FlushSettingsToDisk()
     if not gConfig then return; end
     local applied = gConfig.appliedPositions;
     gConfig.appliedPositions = nil;
     local ok, err = pcall(settings.save);
     gConfig.appliedPositions = applied or T{};
     if not ok then
-        _settingsDirty = true;
-        _settingsDirtyAt = MonotonicMs();
+        MarkSettingsDirty();
         error(err);
+    end
+end
+
+-- Immediate on load/unload/commands. During Present, only queue — never write.
+function SaveVanaDialSettings()
+    if _inPresentFrame then
+        MarkSettingsDirty();
+        return;
+    end
+    FlushSettingsToDisk();
+end
+
+local function ScheduleSettingsFlush()
+    if _saveTaskPending or not _settingsDirty then return; end
+    _saveTaskPending = true;
+    local scheduled = pcall(function()
+        ashita.tasks.once(0.05, function()
+            _saveTaskPending = false;
+            if not _addonAlive or not gConfig then return; end
+            local ok = xpcall(FlushSettingsToDisk, function(e) return tostring(e); end);
+            if ok then
+                _settingsDirty = false;
+            else
+                MarkSettingsDirty();
+            end
+        end);
+    end);
+    if not scheduled then
+        _saveTaskPending = false;
     end
 end
 
@@ -745,6 +775,7 @@ ashita.events.register('unload', 'vd_unload', function()
     -- Flush any pending window-position changes so a drag right before unload
     -- (or reload) is never lost.
     SaveVanaDialSettings();
+    _addonAlive = false;
 end);
 
 local function PresentFrame()
@@ -800,7 +831,7 @@ local function PresentFrame()
                 if _configOpen and not open then
                     -- Request an immediate retryable save after this frame.
                     if _settingsDirty then
-                        _settingsDirtyAt = 0;
+                        _settingsDirtyAt = MonotonicMs() - 800;
                     end
                 end
                 _configOpen = open;
@@ -808,26 +839,26 @@ local function PresentFrame()
         end);
     end
 
-    -- Debounced persistence: write the dragged window position to disk ~0.75s
-    -- after the last movement, so positions survive reload without saving on
-    -- every frame of a drag.
-    if _settingsDirty and (MonotonicMs() - _settingsDirtyAt) > 750 then
-        local saved = RunPresentComponent('Settings save', SaveVanaDialSettings);
-        if saved then
-            _settingsDirty = false;
-        end
-    end
 end
 
 local _lastPresentFatalLog = -60000;
 ashita.events.register('d3d_present', 'vd_present', function()
+    _inPresentFrame = true;
     local ok, err = xpcall(PresentFrame, Traceback);
+    _inPresentFrame = false;
     if not ok then
         local now = MonotonicMs();
         if now - _lastPresentFatalLog >= 30000 then
             _lastPresentFatalLog = now;
             pcall(VanaDialPrint, 'PRESENT contained an unexpected error: ' .. tostring(err));
         end
+    end
+    -- Flush off the Present thread after widgets have settled. settings.save
+    -- serializes the whole table and writes disk; doing that inside ImGui
+    -- (especially while dragging sliders/colors) triggers GC that can free
+    -- another addon's D3D textures still in this frame's draw list.
+    if _settingsDirty and (MonotonicMs() - _settingsDirtyAt) > 750 then
+        ScheduleSettingsFlush();
     end
 end);
 
