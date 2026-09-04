@@ -8,25 +8,17 @@ Standalone Ashita v4 addon for Horizon XI / FFXI: Vana'diel time, elemental days
 
 ## See it in action
 
-Click a screenshot to play the video on GitHub.
-
 **Clock, days, moon phase, and Fenrir tooltip**
 
-[![Moon phase and Fenrir tooltip](docs/example-moon-tooltip.png)](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-full-moon.mp4)
-
-[Watch video](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-full-moon.mp4)
+<img src="docs/example-full-moon.gif" alt="Vana'Dial moon phase and Fenrir tooltip" width="720">
 
 **Airship, boat, RSE, and lunar timers**
 
-[![Timer panel](docs/example-timers.png)](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-timers.mp4)
-
-[Watch video](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-timers.mp4)
+<img src="docs/example-timers.gif" alt="Vana'Dial airship timer panel" width="720">
 
 **Settings** (`/vd config`)
 
-[![Settings window](docs/example-settings.png)](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-settings.mp4)
-
-[Watch video](https://github.com/ferrisaj87/vanadial/blob/main/docs/example-settings.mp4)
+<img src="docs/example-settings.gif" alt="Vana'Dial settings window" width="560">
 
 ## Install
 
