@@ -22,7 +22,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.39';
+addon.version = '1.4.40';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -749,8 +749,6 @@ ashita.events.register('load', 'vd_load', function()
     -- font plus the event window's italic font before any PRESENT callback.
     imtext.PrewarmFonts({'Tahoma'});
     imtext.PrewarmItalicFonts({'Arial'});
-    imtext.SetConfig('Tahoma', true, 2);
-    imtext.PrebakeSizes(8, 52);
     display.Initialize();
     local pointersOk, complete = xpcall(ResolveClientPointers, Traceback);
     local w = pointersOk and ReadWeatherFromMemory() or nil;
@@ -789,18 +787,8 @@ ashita.events.register('unload', 'vd_unload', function()
     _addonAlive = false;
 end);
 
-local _sizesBaked = false;
-
 local function PresentFrame()
     RunPresentComponent('Texture release', TextureManager.FlushPendingReleases);
-    -- Second-chance bake once ImGui is in a real frame. Load-time PushFont is
-    -- best-effort; first present is usually title screen (we are not drawing).
-    if not _sizesBaked then
-        RunPresentComponent('Font size bake', function()
-            imtext.PrebakeSizes(8, 52);
-        end);
-        _sizesBaked = true;
-    end
     if not RunPresentComponent('Present cache', RefreshPresentCache) then return; end
 
     local inWorldDraw = _presentInWorld and not IsPlayerZoningNow() and GetSettingsCharKey() ~= nil;

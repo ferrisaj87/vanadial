@@ -208,35 +208,6 @@ function M.GetItalicFont(fontFamily)
     return cached and cached or nil;
 end
 
---- Force ImGui 1.92 to rasterize the sizes the clock/timers can request.
---- AddText(font, size) otherwise bakes a new size on first use from
---- d3d_present and can AV while other addons already have draw lists queued.
-function M.PrebakeSizes(minSize, maxSize)
-    minSize = math.floor(tonumber(minSize) or 8);
-    maxSize = math.floor(tonumber(maxSize) or 52);
-    if maxSize < minSize then return; end
-
-    local fonts = {};
-    for _, font in pairs(fontCache) do
-        if font then fonts[#fonts + 1] = font; end
-    end
-    for _, font in pairs(italicFontCache) do
-        if font then fonts[#fonts + 1] = font; end
-    end
-    if activeFont then fonts[#fonts + 1] = activeFont; end
-
-    for i = 1, #fonts do
-        local font = fonts[i];
-        for size = minSize, maxSize do
-            local pushOk = pcall(imgui.PushFont, font, size);
-            if pushOk then
-                pcall(imgui.CalcTextSize, 'VT: 00:00 100%');
-                pcall(imgui.PopFont);
-            end
-        end
-    end
-end
-
 --- Reset transient frame caches (call on settings change).
 --- NOTE: fontCache and activeFont are intentionally NOT cleared. ImFont
 --- pointers are owned by ImGui's atlas and remain valid for the addon's
