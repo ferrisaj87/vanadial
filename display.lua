@@ -570,10 +570,14 @@ function M.Reset()
     imtext.Reset();
 end
 
--- Drop cached D3D textures after a device reset / zone. COM release is
--- deferred until the next present so this frame's draw list can finish.
+-- Drop this addon's cached D3D textures after a device reset / zone. COM
+-- release is deferred until the next present so this frame's draw list can
+-- finish. Do not TextureManager.clear() — if this manager is shared with
+-- XIUI, a full clear drops every XIUI texture mid-session.
 function M.InvalidateTextures()
-    TextureManager.clear();
+    TextureManager.evictKeyPrefix('file_VanaDial/');
+    TextureManager.evictKeyPrefix('file_backgrounds/');
+    TextureManager.evictKey('file_icons/gear');
     windowbg.ClearTintCache();
     for k in pairs(textures)          do textures[k]          = nil; end
     for k in pairs(moonPhaseTextures) do moonPhaseTextures[k] = nil; end

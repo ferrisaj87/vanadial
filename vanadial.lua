@@ -22,7 +22,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.40';
+addon.version = '1.4.41';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -496,6 +496,10 @@ RearmPositionIfInWorld = function()
     _positionReady = true;
 end
 
+local function ResetWeatherState()
+    weatherId = 0;
+end
+
 local function BeginZoning()
     _allowPositionSave = false;
     _positionReady = false;
@@ -505,58 +509,22 @@ local function BeginZoning()
     _presentMenuOpen = false;
     _presentChatOpen = false;
     _menuChatTick = -1;
+    -- Weather object is torn down with the zone. Never keep a stale memory
+    -- pointer and never read it from present or a delayed zone task: pcall
+    -- cannot catch a C access violation from ashita.memory.read_*.
+    ResetWeatherState();
 end
--- ── Weather (packet 0x057 primary; memory fallback on zone-in only) ───────────
--- Incoming 0x057 carries weather ID at byte offset 0x08. Reading memory on every
--- 0x057 was re-scanning FFXiMain.dll when the pointer was wrong, causing ~1s hitches.
-local WEATHER_SIG         = '66A1????????663D????72';
-local WEATHER_PKT_OFF     = 9;   -- Lua 1-based index for packet byte 0x08
-local _weatherPtr         = nil;
-local _weatherMemResolved = false; -- true after one resolve attempt (success or fail)
-
--- Horizon XI uses FFXiMain.dll only; avoid the fallback scan of all modules (very slow).
-local function memory_find_compat(pattern, offset, scan)
-    local result = ashita.memory.find('FFXiMain.dll', 0, pattern, offset, scan);
-    if result ~= nil and result ~= 0 then return result end;
-    return nil;
-end
-
-local function ResolveWeatherPtrOnce()
-    if _weatherMemResolved then return _weatherPtr end;
-    _weatherMemResolved = true;
-
-    local ok, result = pcall(function()
-        local base = memory_find_compat(WEATHER_SIG, 0, 0);
-        if not base or base == 0 then return nil end;
-        local ptr = ashita.memory.read_uint32(base + 0x02);
-        if not ptr or ptr == 0 then return nil end;
-        return ptr;
-    end);
-    if ok and type(result) == 'number' and result ~= 0 then
-        _weatherPtr = result;
-    end
-    return _weatherPtr;
-end
-
-local function ReadWeatherFromMemory()
-    local ptr = _weatherPtr;
-    if not ptr then return nil end;
-    local ok, w = pcall(function() return ashita.memory.read_uint8(ptr); end);
-    if ok and type(w) == 'number' and w >= 0 and w <= 19 then
-        return w;
-    end
-    return nil;
-end
+-- ── Weather (packet 0x057 only) ───────────────────────────────────────────────
+-- Incoming 0x057 carries weather ID at byte offset 0x08. A memory fallback after
+-- zone-in used a cached weather pointer that is invalid while zoning; reading it
+-- takes down the renderer. Wait for the packet.
+local WEATHER_PKT_OFF = 9;   -- Lua 1-based index for packet byte 0x08
 
 local function ReadWeatherFromPacket(data)
     if type(data) ~= 'string' or #data < WEATHER_PKT_OFF then return nil end;
     local w = data:byte(WEATHER_PKT_OFF);
     if w and w >= 0 and w <= 19 then return w; end;
     return nil;
-end
-
-local function ResetWeatherState()
-    weatherId             = 0;
 end
 
 -- ── Game menu detection (for "Hide When Menu Open") ───────────────────────────
@@ -645,11 +613,9 @@ end
 
 -- Signature scans never run from PRESENT. They are resolved during load or a
 -- delayed Ashita task after zoning; failures are nonfatal and retried later.
+-- Menu/chat pointers are FFXiMain.dll code addresses (stable). Weather is
+-- packet-only — do not resolve or dereference a weather object pointer here.
 local function ResolveClientPointers()
-    if not _weatherPtr then
-        _weatherMemResolved = false;
-        ResolveWeatherPtrOnce();
-    end
     if not _pGameMenu then
         _gameMenuFailed = false;
         _pGameMenu = ResolveGameMenuPtr();
@@ -660,7 +626,7 @@ local function ResolveClientPointers()
         _pChatExpanded = ResolveChatExpandedPtr();
         _chatExpandedFailed = _pChatExpanded == nil;
     end
-    return _weatherPtr ~= nil and _pGameMenu ~= nil and _pChatExpanded ~= nil;
+    return _pGameMenu ~= nil and _pChatExpanded ~= nil;
 end
 
 local _pointerResolveGeneration = 0;
@@ -673,10 +639,6 @@ local function SchedulePointerResolve(initialDelay)
             ashita.tasks.once(delay, function()
                 if generation ~= _pointerResolveGeneration then return; end
                 local ok, complete = xpcall(ResolveClientPointers, Traceback);
-                if ok and _weatherPtr then
-                    local w = ReadWeatherFromMemory();
-                    if w ~= nil then weatherId = w; end
-                end
                 if (not ok or not complete) and attempt < 4 then
                     scheduleAttempt(math.min(5 * attempt, 30), attempt + 1);
                 end
@@ -751,8 +713,6 @@ ashita.events.register('load', 'vd_load', function()
     imtext.PrewarmItalicFonts({'Arial'});
     display.Initialize();
     local pointersOk, complete = xpcall(ResolveClientPointers, Traceback);
-    local w = pointersOk and ReadWeatherFromMemory() or nil;
-    if w ~= nil then weatherId = w; end
     if not pointersOk or not complete then SchedulePointerResolve(5); end
     _positionReady = false;
     _wasInWorldDraw = false;
@@ -774,8 +734,6 @@ ashita.events.register('unload', 'vd_unload', function()
     _pointerResolveGeneration = _pointerResolveGeneration + 1;
     updater.Cancel();
     ResetWeatherState();
-    _weatherPtr = nil;
-    _weatherMemResolved = false;
     _pGameMenu = nil;
     _gameMenuFailed = false;
     _pChatExpanded = nil;
@@ -881,7 +839,6 @@ end);
 ashita.events.register('packet_in', 'vd_packet', function(e)
     if e.id == 0x000A then
         BeginZoning();
-        ResetWeatherState();
         TextureManager.ResetD3D8Device();
         display.InvalidateTextures();
         SchedulePointerResolve(2);

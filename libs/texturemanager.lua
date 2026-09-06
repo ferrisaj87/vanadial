@@ -525,6 +525,43 @@ function M.clearOnZone()
     end
 end
 
+-- Remove one cache entry without touching the rest of the manager.
+-- Use this instead of clear() when only this addon's textures should drop
+-- (a shared TextureManager.clear() would evict every XIUI icon mid-session).
+function M.evictKey(key)
+    local entry = texturesByKey[key];
+    if entry == nil then return; end
+    texturesByKey[key] = nil;
+    local entries = categoryEntries[entry.category];
+    if entries then
+        for i = #entries, 1, -1 do
+            if entries[i] == entry or entries[i].key == key then
+                table.remove(entries, i);
+                break;
+            end
+        end
+    end
+    deferRelease(entry);
+    stats.evictions = stats.evictions + 1;
+    if entry.category and stats.byCategory[entry.category] then
+        stats.byCategory[entry.category].evictions =
+            (stats.byCategory[entry.category].evictions or 0) + 1;
+    end
+end
+
+function M.evictKeyPrefix(prefix)
+    if prefix == nil or prefix == '' then return; end
+    local doomed = {};
+    for key in pairs(texturesByKey) do
+        if key:sub(1, #prefix) == prefix then
+            doomed[#doomed + 1] = key;
+        end
+    end
+    for i = 1, #doomed do
+        M.evictKey(doomed[i]);
+    end
+end
+
 -- Clear all caches (called on profile switch and addon unload)
 function M.clear()
     -- Defer the actual COM release so this frame's draw list can finish.
