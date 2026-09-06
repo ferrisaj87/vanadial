@@ -22,7 +22,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.38';
+addon.version = '1.4.39';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -499,6 +499,12 @@ end
 local function BeginZoning()
     _allowPositionSave = false;
     _positionReady = false;
+    _presentInWorld = false;
+    _inWorldReady = false;
+    _inWorldTick = -1;
+    _presentMenuOpen = false;
+    _presentChatOpen = false;
+    _menuChatTick = -1;
 end
 -- ── Weather (packet 0x057 primary; memory fallback on zone-in only) ───────────
 -- Incoming 0x057 carries weather ID at byte offset 0x08. Reading memory on every
@@ -700,7 +706,10 @@ local function RefreshPresentCache()
 
     local needMenu = gConfig.vanaTimeHideOnMenuFocus == true;
     local needChat = gConfig.vanaTimeHideOnChatExpanded == true;
-    if needMenu then
+    -- Menu/chat pointer walks go through live FFXI objects. During zoning those
+    -- objects are torn down; reading them from d3d_present is a C0000005.
+    local allowClientReads = _presentInWorld == true;
+    if needMenu and allowClientReads then
         if _menuChatTick < 0 or (t - _menuChatTick) >= MENU_CHAT_INTERVAL_MS then
             _menuChatTick = t;
             _presentMenuOpen = IsGameMenuOpen();
@@ -708,7 +717,7 @@ local function RefreshPresentCache()
     else
         _presentMenuOpen = false;
     end
-    if needChat then
+    if needChat and allowClientReads then
         _presentChatOpen = IsChatExpanded();
     else
         _presentChatOpen = false;
@@ -740,6 +749,8 @@ ashita.events.register('load', 'vd_load', function()
     -- font plus the event window's italic font before any PRESENT callback.
     imtext.PrewarmFonts({'Tahoma'});
     imtext.PrewarmItalicFonts({'Arial'});
+    imtext.SetConfig('Tahoma', true, 2);
+    imtext.PrebakeSizes(8, 52);
     display.Initialize();
     local pointersOk, complete = xpcall(ResolveClientPointers, Traceback);
     local w = pointersOk and ReadWeatherFromMemory() or nil;
@@ -778,8 +789,18 @@ ashita.events.register('unload', 'vd_unload', function()
     _addonAlive = false;
 end);
 
+local _sizesBaked = false;
+
 local function PresentFrame()
     RunPresentComponent('Texture release', TextureManager.FlushPendingReleases);
+    -- Second-chance bake once ImGui is in a real frame. Load-time PushFont is
+    -- best-effort; first present is usually title screen (we are not drawing).
+    if not _sizesBaked then
+        RunPresentComponent('Font size bake', function()
+            imtext.PrebakeSizes(8, 52);
+        end);
+        _sizesBaked = true;
+    end
     if not RunPresentComponent('Present cache', RefreshPresentCache) then return; end
 
     local inWorldDraw = _presentInWorld and not IsPlayerZoningNow() and GetSettingsCharKey() ~= nil;
@@ -865,6 +886,7 @@ end);
 ashita.events.register('zone_change', 'vd_zone_change', function()
     BeginZoning();
     TextureManager.ResetD3D8Device();
+    display.InvalidateTextures();
     SchedulePointerResolve(2);
 end);
 
@@ -873,6 +895,7 @@ ashita.events.register('packet_in', 'vd_packet', function(e)
         BeginZoning();
         ResetWeatherState();
         TextureManager.ResetD3D8Device();
+        display.InvalidateTextures();
         SchedulePointerResolve(2);
         return;
     end

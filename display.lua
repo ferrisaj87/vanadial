@@ -570,14 +570,11 @@ function M.Reset()
     imtext.Reset();
 end
 
-function M.Cleanup()
-    -- Release D3D textures held by the shared TextureManager cache.
+-- Drop cached D3D textures after a device reset / zone. COM release is
+-- deferred until the next present so this frame's draw list can finish.
+function M.InvalidateTextures()
     TextureManager.clear();
     windowbg.ClearTintCache();
-    imtext.Reset();
-    _mainWindowParked = false;
-    -- Clear shared texture tables in place so popups' context keeps referencing
-    -- the same tables (a fresh {} would orphan popups._ctx and the old textures).
     for k in pairs(textures)          do textures[k]          = nil; end
     for k in pairs(moonPhaseTextures) do moonPhaseTextures[k] = nil; end
     todTextures.day         = nil;
@@ -589,6 +586,12 @@ function M.Cleanup()
     clockIconTex      = nil;
     gearIconTex       = nil;
     nextTextureRetryMs = 0;
+end
+
+function M.Cleanup()
+    M.InvalidateTextures();
+    imtext.Reset();
+    _mainWindowParked = false;
     popups.SetTimersOpen(false);
 end
 
