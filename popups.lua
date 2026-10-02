@@ -466,6 +466,9 @@ local function DrawRouteRow(row, id)
     elseif row.isBoarding then
         imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorBoarding, 'BOARDING');
+    elseif row.isDocking then
+        imgui.SameLine(0, 10);
+        imgui.TextColored(timers.colorDocking, 'DOCKING');
     elseif row.isTransit then
         imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');

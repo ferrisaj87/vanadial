@@ -34,6 +34,9 @@ local FERRY_TRANSIT_VT_NASH = 300;
 
 -- Yellow "soon" threshold: 5 real minutes
 local SOON_SECS = 300;
+-- Last 15 Earth seconds shown on a boat arrival countdown. VT schedule windows
+-- are unchanged; this only relabels that stretch of the existing timer.
+local DOCK_EARTH_SECS = 15;
 
 -- Nation / city label colours (float4, RGB from user spec — brightened for dark bg)
 local C_CITY = {
@@ -87,6 +90,7 @@ local CF4_WAITING  = {0.800, 0.800, 0.800, 1.0};  -- 0xFFCCCCCC waiting grey
 local CF4_CL_TRANS = {0.510, 0.392, 0.055, 1.0};  -- 0xFF82640E CL/Manaclipper in-transit
 local CF4_CL_SVC   = {0.400, 0.733, 0.400, 1.0};  -- 0xFF66BB66 serviced soon
 local CF4_CL_OOS   = {0.800, 0.200, 0.200, 1.0};  -- 0xFFCC3333 out of service
+local CF4_DOCKING  = {0.400, 0.710, 1.000, 1.0};  -- boat docking (timer + status)
 
 -- ── Schedule tables (VT minutes from midnight, 0-1439) ─────────────────────
 -- Store DEPARTURE TIMES only. The state machine derives everything else from
@@ -344,6 +348,16 @@ end
 
 -- BOARDING [dep-boardVt, dep); IN-TRANSIT [dep, dep+transitVt). Countdown to dep / arrive.
 -- All Fill* helpers mutate pre-allocated row tables (no per-tick table churn).
+-- Relabel the last DOCK_EARTH_SECS of an in-transit arrival countdown as docking.
+local function ApplyBoatDocking(dst, secs)
+    if dst.isTransit and secs <= DOCK_EARTH_SECS then
+        dst.isDocking = true;
+        dst.cdColor = CF4_DOCKING;
+    else
+        dst.isDocking = false;
+    end
+end
+
 local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, schedule, arrow, boardVt, transitVt)
     boardVt   = boardVt   or FERRY_BOARD_VT_STD;
     transitVt = transitVt or FERRY_TRANSIT_VT_STD;
@@ -358,6 +372,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
             dst.arrow = arrow or '<>';
             dst.countdownStr = FmtRealCountdown(secs); dst.cdColor = cdColor;
             dst.isBoarding = true; dst.isTransit = false; dst.isEmpty = false;
+            ApplyBoatDocking(dst, secs);
             return;
         end
     end
@@ -372,6 +387,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
             dst.arrow = arrow or '<>';
             dst.countdownStr = FmtRealCountdown(secs); dst.cdColor = cdColor;
             dst.isBoarding = false; dst.isTransit = true; dst.isEmpty = false;
+            ApplyBoatDocking(dst, secs);
             return;
         end
     end
@@ -393,6 +409,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
         dst.arrow = arrow or '<>';
         dst.countdownStr = '--'; dst.cdColor = CF4_WAITING;
         dst.isBoarding = false; dst.isTransit = false; dst.isEmpty = true;
+        dst.isDocking = false;
         return;
     end
     local secs = SecsToVtMin(bestBoard, vtMinuteOfDay, vtDay, osNow);
@@ -402,6 +419,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
     dst.arrow = arrow or '<>';
     dst.countdownStr = FmtRealCountdown(secs); dst.cdColor = cdColor;
     dst.isBoarding = false; dst.isTransit = false; dst.isEmpty = false;
+    ApplyBoatDocking(dst, secs);
 end
 
 local function FillHeader(dst, text)
@@ -427,16 +445,19 @@ local function FillCLRouteRow(dst, route, vtMin, vtDay, osNow)
     for _, run in ipairs(sched) do
         local soonStart = (run.boarding - CL_SOON_VT + 1440) % 1440;
         if InVtInterval(vtMin, run.dep, run.arr) then
-            FillCLRow(dst, route, true, false, false, false,
-                SecsToVtMin(run.arr, vtMin, vtDay, osNow), CF4_CL_TRANS);
+            local secs = SecsToVtMin(run.arr, vtMin, vtDay, osNow);
+            FillCLRow(dst, route, true, false, false, false, secs, CF4_CL_TRANS);
+            ApplyBoatDocking(dst, secs);
             return;
         elseif InVtInterval(vtMin, run.boarding, run.dep) then
-            FillCLRow(dst, route, false, true, false, false,
-                SecsToVtMin(run.dep, vtMin, vtDay, osNow), CF4_BOARDING);
+            local secs = SecsToVtMin(run.dep, vtMin, vtDay, osNow);
+            FillCLRow(dst, route, false, true, false, false, secs, CF4_BOARDING);
+            ApplyBoatDocking(dst, secs);
             return;
         elseif InVtInterval(vtMin, soonStart, run.boarding) then
-            FillCLRow(dst, route, false, false, true, false,
-                SecsToVtMin(run.boarding, vtMin, vtDay, osNow), CF4_CL_SVC);
+            local secs = SecsToVtMin(run.boarding, vtMin, vtDay, osNow);
+            FillCLRow(dst, route, false, false, true, false, secs, CF4_CL_SVC);
+            ApplyBoatDocking(dst, secs);
             return;
         end
     end
@@ -448,8 +469,9 @@ local function FillCLRouteRow(dst, route, vtMin, vtDay, osNow)
         if diff <= 0 then diff = diff + 1440 end
         if diff < bestDiff then bestDiff = diff; bestBoard = run.boarding end
     end
-    FillCLRow(dst, route, false, false, false, true,
-        SecsToVtMin(bestBoard, vtMin, vtDay, osNow), CF4_CL_OOS);
+    local oosSecs = SecsToVtMin(bestBoard, vtMin, vtDay, osNow);
+    FillCLRow(dst, route, false, false, false, true, oosSecs, CF4_CL_OOS);
+    ApplyBoatDocking(dst, oosSecs);
 end
 
 local function FillAirshipLeg(dst, lbl, realSecs, opts)
@@ -565,6 +587,7 @@ end
 
 -- Pre-computed colour float4 tables exposed to render code (reference CF4_ tables, no extra allocation)
 M.colorBoarding = CF4_BOARDING;
+M.colorDocking  = CF4_DOCKING;
 M.colorAwaiting = CF4_AWAITING;
 M.colorSoon     = CF4_SOON;
 M.colorWaiting  = CF4_WAITING;
