@@ -34,8 +34,8 @@ local FERRY_TRANSIT_VT_NASH = 300;
 
 -- Yellow "soon" threshold: 5 real minutes
 local SOON_SECS = 300;
--- Last 15 Earth seconds shown on a boat arrival countdown. VT schedule windows
--- are unchanged; this only relabels that stretch of the existing timer.
+-- Last 15 Earth seconds before a boat arrives. VT schedule windows are unchanged.
+-- In-transit counts down to this window; docking counts down the window itself.
 local DOCK_EARTH_SECS = 15;
 
 -- Nation / city label colours (float4, RGB from user spec — brightened for dark bg)
@@ -348,11 +348,16 @@ end
 
 -- BOARDING [dep-boardVt, dep); IN-TRANSIT [dep, dep+transitVt). Countdown to dep / arrive.
 -- All Fill* helpers mutate pre-allocated row tables (no per-tick table churn).
--- Relabel the last DOCK_EARTH_SECS of an in-transit arrival countdown as docking.
+-- Split a boat arrival countdown into in-transit, then docking.
+-- In-transit ends when docking starts. Docking is the last DOCK_EARTH_SECS.
 local function ApplyBoatDocking(dst, secs)
     if dst.isTransit and secs <= DOCK_EARTH_SECS then
         dst.isDocking = true;
         dst.cdColor = CF4_DOCKING;
+        dst.countdownStr = FmtRealCountdown(secs);
+    elseif dst.isTransit then
+        dst.isDocking = false;
+        dst.countdownStr = FmtRealCountdown(secs - DOCK_EARTH_SECS);
     else
         dst.isDocking = false;
     end
