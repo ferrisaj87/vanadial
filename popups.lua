@@ -20,6 +20,7 @@ local windowbg       = require('libs.windowbackground');
 local Safe           = require('libs.imgui_safe');
 local timers         = require('timers');
 local data           = require('data');
+local popouts        = require('popouts');
 
 local M = {};
 
@@ -247,6 +248,7 @@ local SECTION_LABELS = {
     vdboats = 'Boats##vdTimers',
     vdrse   = 'RSE##vdTimers',
     vdlunar = 'Lunar Phases##vdTimers',
+    vdguilds = 'Guild Shops##vdTimers',
 };
 local SECTION_KEY_ALIASES = {
     vtships    = 'vdships',
@@ -256,6 +258,9 @@ local SECTION_KEY_ALIASES = {
     vtbarge    = 'vdbarge',
     vtrse      = 'vdrse',
     vtlunar    = 'vdlunar',
+    vtguilds   = 'vdguilds',
+    vtguildshops = 'vdguilds',
+    vdguildshops = 'vdguilds',
 };
 
 local BOAT_TIMER_COMMANDS = {
@@ -473,6 +478,7 @@ local function DrawRouteRow(row, id)
         imgui.SameLine(0, 10);
         imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
     end
+    popouts.PinButton(id, popouts.BoatKey(row));
 end
 
 local function DrawAirshipLeg(leg, fontScale, id)
@@ -510,6 +516,7 @@ end
 
 local function DrawAirshipRow(row, index)
     DrawAirshipLeg(row, 1.0, 'air_' .. index);
+    popouts.PinButton('air_' .. index, popouts.AirshipKey(index));
     if row.sub then
         local ok, err = Safe.Run(function(scope)
             scope:Indent(18);
@@ -597,6 +604,7 @@ local function DrawRSEContent()
             imgui.SameLine(0, 10);
             imgui.TextColored(timers.colorDimGrey, e.dateStr);
         end
+        popouts.PinButton('rse_' .. i, popouts.RseKey(i));
         if i < #rse then DrawSectionDivider() end
     end
 end
@@ -648,27 +656,139 @@ local function DrawLunarContent()
                 ToU32(WithAlpha(borderArgb, 0.80)), 3, nil, 1.0);
         end
 
+        popouts.PinButton('lunar_' .. i, popouts.LunarKey(e.phaseIdx));
         if i < #lun then DrawSectionDivider() end
     end
 end
 
+local function DrawGuildLocation(e, hol, pillId, holId)
+    local muted = hol.onHoliday == true;
+    local nameColor = muted and timers.colorDimGrey or (e.nameColor or timers.colorGold);
+    local placeColor = muted and timers.colorDimGrey or (hol.placeColor or nameColor);
+    imgui.TextColored(nameColor, e.shortName or e.name or '');
+    if hol.place and hol.place ~= '' then
+        imgui.SameLine(0, 4);
+        imgui.TextColored(timers.colorDimGrey, '-');
+        imgui.SameLine(0, 4);
+        imgui.TextColored(placeColor, hol.place);
+    end
+    imgui.SameLine(0, 8);
+    DrawTimerPill(pillId, hol.pillText or '', hol.statusColor or timers.colorDimGrey);
+    popouts.PinButton(pillId, popouts.GuildKey(e.id, hol.place));
+    imgui.Indent(18);
+    imgui.TextColored(muted and timers.colorDimGrey or timers.colorTeal, 'Holidays:');
+    imgui.SameLine(0, 6);
+    imgui.TextColored(muted and timers.colorDimGrey or timers.DayColor(hol.colorKey), hol.name or '');
+    if hol.countdownStr and hol.countdownStr ~= '' then
+        imgui.SameLine(0, 8);
+        DrawTimerPill(holId, hol.countdownStr, hol.cdColor or timers.colorDocking);
+    end
+    imgui.Unindent(18);
+end
+
+local function DrawGuildContent()
+    local guilds = timers.guilds;
+    local drew = false;
+    for i, e in ipairs(guilds) do
+        if not e.name then break; end
+        if timers.GuildShown(e.id) then
+            if drew then DrawSectionDivider(); end
+            drew = true;
+            local count = e.holidayCount or 0;
+            for h = 1, count do
+                DrawGuildLocation(e, e.holidays[h], 'guild_' .. i .. '_' .. h, 'guildhol_' .. i .. '_' .. h);
+            end
+        end
+    end
+    if not drew then
+        imgui.TextColored(timers.colorDimGrey, 'No shops selected');
+    end
+end
+
+local guildGearTex = nil;
+
+local function DrawGuildGear()
+    local x1, y1 = imgui.GetItemRectMin();
+    local x2, y2 = imgui.GetItemRectMax();
+    if not x1 or not y1 or not x2 or not y2 then return; end
+    local sz = math.max(12, (y2 - y1) - 6);
+    local gx = x2 - sz - 6;
+    local gy = y1 + ((y2 - y1) - sz) * 0.5;
+    if not guildGearTex then
+        guildGearTex = TextureManager.getFileTexture('icons/gear');
+    end
+    local tex = GetTexPtr(guildGearTex);
+    local dl = imgui.GetWindowDrawList();
+    if tex and dl then
+        DLImage(dl, tex, gx, gy, gx + sz, gy + sz, imgui.GetColorU32(COL_GOLD_TEXT));
+    end
+    imgui.SetCursorScreenPos({gx, gy});
+    if imgui.InvisibleButton('##vdGuildGear', {sz, sz}) then
+        imgui.OpenPopup('vdGuildShops');
+    end
+    if imgui.IsItemHovered() then
+        imgui.SetTooltip('Choose guild shops');
+    end
+    imgui.NewLine();
+    if imgui.BeginPopup('vdGuildShops') then
+        imgui.TextColored(COL_GOLD_TEXT, 'Guild Shops');
+        local choices = timers.guildChoices;
+        for i = 1, #choices do
+            local choice = choices[i];
+            local shown = timers.GuildShown(choice.id);
+            local value = T{ shown };
+            if imgui.Checkbox(choice.name .. '##vdGuildShop', value) then
+                if not gConfig.guildShops then gConfig.guildShops = T{}; end
+                gConfig.guildShops[choice.id] = value[1] == true;
+                if SaveVanaDialSettings then SaveVanaDialSettings(); end
+            end
+        end
+        imgui.EndPopup();
+    end
+end
+
+local GUILD_HEADER_FLAGS = bit.bor(ImGuiTreeNodeFlags_AllowOverlap);
+
+local function DrawGuildSection()
+    local label = 'Guild Shops##vdTimers';
+    if collapsePhase == 1 then
+        imgui.SetNextItemOpen(false, ImGuiCond_Always);
+    elseif pendingOpenSection ~= nil then
+        imgui.SetNextItemOpen(pendingOpenSection == label, ImGuiCond_Always);
+    end
+    local isOpen = false;
+    local ok, err = Safe.Run(function(scope)
+        scope:PushStyleColor(ImGuiCol_Text, COL_GOLD_TEXT);
+        isOpen = imgui.CollapsingHeader(label, GUILD_HEADER_FLAGS);
+    end);
+    if not ok then error(err); end
+    DrawGuildGear();
+    if isOpen then DrawGuildContent(); end
+end
+
 -- ── Public: DrawTimersPopup ────────────────────────────────────────────────────
+
+-- Keeps the shared timer cache current. Pop outs call this too, so a detached
+-- route keeps counting after the main timer panel closes.
+local function RefreshTimerData()
+    local osNow = os.time();
+    if not timers.NeedsUpdate(osNow) then return; end
+    local rawTime       = data.GetRawTime();
+    local vtDay         = math.floor(rawTime / data.VD_DAY_SEC);
+    local vtHour        = math.floor(rawTime % data.VD_DAY_SEC / data.VD_HOUR_SEC);
+    local vtMin         = math.floor(rawTime % data.VD_HOUR_SEC / data.VD_MIN_F);
+    local vtMinuteOfDay = vtHour * 60 + vtMin;
+    local moonDay       = (vtDay + data.VD_MOON_OFFSET) % data.VD_MOON_DAYS;
+    timers.Update(osNow, vtMinuteOfDay, vtDay, moonDay);
+end
+
+popouts.SetRefresh(RefreshTimerData);
 
 function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     local cfg = gConfig;
     if not cfg or not _ctx or not timersOpen then return; end
 
-    -- Refresh schedule data only when the second/minute rolls (not every ImGui frame).
-    local osNow = os.time();
-    if timers.NeedsUpdate(osNow) then
-        local rawTime       = data.GetRawTime();
-        local vtDay         = math.floor(rawTime / data.VD_DAY_SEC);
-        local vtHour        = math.floor(rawTime % data.VD_DAY_SEC / data.VD_HOUR_SEC);
-        local vtMin         = math.floor(rawTime % data.VD_HOUR_SEC / data.VD_MIN_F);
-        local vtMinuteOfDay = vtHour * 60 + vtMin;
-        local moonDay       = (vtDay + data.VD_MOON_OFFSET) % data.VD_MOON_DAYS;
-        timers.Update(osNow, vtMinuteOfDay, vtDay, moonDay);
-    end
+    RefreshTimerData();
 
     local mainWinPos  = _ctx.mainWinPos;
     local mainWinSize = _ctx.mainWinSize;
@@ -717,6 +837,7 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         DrawTimerSection('Boats##vdTimers',        DrawBoatsContent);
         DrawTimerSection('RSE##vdTimers',          DrawRSEContent);
         DrawTimerSection('Lunar Phases##vdTimers', DrawLunarContent);
+        DrawGuildSection();
 
         -- Tick down the collapse phase: 2→1 (sub-groups done, top-level next frame), 1→0 (done).
         if collapsePhase > 0 then

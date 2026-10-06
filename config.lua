@@ -153,8 +153,10 @@ local VD_COMMANDS = {
     { '/vd barge',       "Open the timers popup with Carpenters' Landing barge expanded. Run again to close the popup." },
     { '/vd rse',    'Open the timers popup with RSE expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
+    { '/vd guilds', 'Open the timers popup with Guild Shops expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd sunbreezerace', 'Toggle the independent Sunbreeze Racing event window.' },
-    { '/vd reset',  "Reset the Vana'Dial and Sunbreeze Racing window positions." },
+    { '/vd popout <group>', 'Open that timer group in its own window: ships, boats, boatsall, manaclipper, barge, rse, lunar, or guilds. Run it again to close. /vd popout close closes every pop out. Each timer row also has a pin that detaches just that route.' },
+    { '/vd reset',  "Reset the Vana'Dial, Sunbreeze Racing, and timer pop out positions." },
     { '/vd update', 'Download the latest version from GitHub, then /addon reload vanadial.' },
     { '/vd checkupdate', 'Check whether a newer version is available on GitHub.' },
 };

@@ -14,16 +14,18 @@
 *   /vd barge             - Open/close Carpenters' Landing barge timers
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
+*   /vd guilds            - Open/close guild shop timers
 *   /vd sunbreezerace     - Toggle the Sunbreeze Racing event window
-*   /vd reset             - Reset Vana'Dial and Sunbreeze window positions
+*   /vd popout <group>    - Pop a timer group into its own window
+*   /vd reset             - Reset Vana'Dial, Sunbreeze, and pop out positions
 *   /vd update            - Download latest from GitHub (then /addon reload vanadial)
 *   /vd checkupdate       - Check GitHub for a newer version
 ]]--
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.43';
-addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase and transport timers.";
+addon.version = '1.4.68';
+addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
 require('common');
@@ -124,7 +126,19 @@ local defaults = T{
         rse      = false,
         lunar    = false,
     },
+    guildShops = T{
+        alchemy      = true,
+        bonecraft    = true,
+        clothcraft   = true,
+        cooking      = true,
+        fishing      = true,
+        goldsmithing = true,
+        leathercraft = true,
+        smithing     = true,
+        woodworking  = true,
+    },
     windowPositions  = T{},
+    popoutsOpen      = T{},
     colorCustomization = T{
         vanaTime = T{
             bgColor          = 0xFF000000,
@@ -243,6 +257,7 @@ local function EnsureDefaultWindowPosition(persist)
 end
 
 local _activeCharKey = nil;
+local onSettingsReady = nil;
 
 local function GetSettingsCharKey()
     local ok, key = pcall(function()
@@ -288,6 +303,7 @@ local function OnCharacterSettingsReady(s)
     if switching then
         _positionReady = false;
     end
+    if onSettingsReady then onSettingsReady(); end
 end
 
 local function ReloadCharacterSettingsIfNeeded()
@@ -388,6 +404,11 @@ local display         = require('display');
 local popups          = require('popups');
 local config          = require('config');
 local sunbreeze       = require('sunbreeze');
+local popouts         = require('popouts');
+onSettingsReady = function()
+    popouts.RestoreSaved();
+end
+popouts.RestoreSaved();
 local TextureManager  = require('libs.texturemanager');
 
 -- ── Module state ──────────────────────────────────────────────────────────────
@@ -792,6 +813,13 @@ local function PresentFrame()
         RunPresentComponent('Sunbreeze window draw', sunbreeze.Draw);
     end
 
+    -- Timer pop outs stay up when the main timer panel is closed. They follow
+    -- the same in-world and menu/chat gates as Sunbreeze Racing.
+    if inWorldDraw and popouts.IsAnyOpen()
+        and not _presentMenuOpen and not _presentChatOpen then
+        RunPresentComponent('Timer pop outs', popouts.Draw);
+    end
+
     if _configOpen then
         RunPresentComponent('Config window draw', function()
             config.Draw(_configOpen, function(open)
@@ -902,6 +930,19 @@ ashita.events.register('command', 'vd_command', function(e)
         hidden = false;
         popups.OpenTimersSection('vdlunar');
 
+    elseif sub == 'guilds' or sub == 'guild' or sub == 'guildshops' or sub == 'vtguilds' then
+        hidden = false;
+        popups.OpenTimersSection('vdguilds');
+
+    elseif sub == 'popout' then
+        local which = args[3] and args[3]:lower() or '';
+        local msg = popouts.ToggleCommand(which);
+        if msg then
+            VanaDialPrint(msg);
+        else
+            VanaDialPrint('Usage: /vd popout <ships|boats|boatsall|manaclipper|barge|rse|lunar|guilds|close>');
+        end
+
     elseif sub == 'sunbreezerace' then
         local opened = sunbreeze.Toggle();
         VanaDialPrint(opened and 'Sunbreeze Racing window shown.'
@@ -918,8 +959,9 @@ ashita.events.register('command', 'vd_command', function(e)
         gConfig.windowPositions[WINDOW_KEY] = T{ x = 100, y = 100 };
         gConfig.appliedPositions = {};
         sunbreeze.ResetPosition();
+        popouts.ResetPositions();
         SaveVanaDialSettings();
-        VanaDialPrint("Vana'Dial and Sunbreeze Racing positions reset.");
+        VanaDialPrint("Vana'Dial, Sunbreeze Racing, and timer pop out positions reset.");
 
     elseif sub == 'update' then
         updater.RunUpdate();
@@ -938,8 +980,11 @@ ashita.events.register('command', 'vd_command', function(e)
         VanaDialPrint('  /vd barge         - Toggle Carpenters\' Landing barge timers');
         VanaDialPrint('  /vd rse           - Toggle RSE timers (vtrse ok)');
         VanaDialPrint('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
+        VanaDialPrint('  /vd guilds        - Toggle guild shop timers');
         VanaDialPrint('  /vd sunbreezerace - Toggle Sunbreeze Racing window');
-        VanaDialPrint('  /vd reset         - Reset both standalone window positions');
+        VanaDialPrint('  /vd popout <group> - Pop out ships, boats, boatsall, manaclipper, barge, rse, lunar, guilds');
+        VanaDialPrint('  /vd popout close  - Close every timer pop out');
+        VanaDialPrint('  /vd reset         - Reset Vana\'Dial, Sunbreeze, and pop out positions');
         VanaDialPrint('  /vd update        - Download latest from GitHub');
         VanaDialPrint('  /vd checkupdate   - Check GitHub for updates');
         VanaDialPrint('  /vanadial         - Alias for /vd');

@@ -4,7 +4,7 @@
 
 # Vana'Dial
 
-Standalone Ashita v4 addon for Horizon XI / FFXI: Vana'diel time, elemental days, moon phase, zone weather, and transport timers (airships, boats, RSE, lunar).
+Standalone Ashita v4 addon for FFXI: Vana'diel time, elemental days, moon phase, zone weather, transport timers (airships, boats, RSE, lunar), and guild shop hours.
 
 ## See it in action
 
@@ -51,11 +51,16 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd barge` | Toggle Carpenters' Landing barge timers |
 | `/vd rse` | Toggle RSE timers |
 | `/vd lunar` | Toggle lunar phase timers |
+| `/vd guilds` | Toggle guild shop timers |
 | `/vd sunbreezerace` | Toggle the independent standalone Sunbreeze Racing event window |
-| `/vd reset` | Reset the Vana'Dial and Sunbreeze Racing window positions |
+| `/vd popout <group>` | Pop that timer group into its own window (`ships`, `boats`, `boatsall`, `manaclipper`, `barge`, `rse`, `lunar`, `guilds`). Run again to close |
+| `/vd popout close` | Close every timer pop out |
+| `/vd reset` | Reset the Vana'Dial, Sunbreeze Racing, and timer pop out positions |
 | `/vd update` | Download latest from GitHub (`main` branch); then `/addon reload vanadial` |
 | `/vd checkupdate` | Check GitHub for a newer version |
 | `/vanadial` | Alias for `/vd` |
+
+Each timer row has a pin on the right. Click it to detach that route — Selbina <> Mhaura, for example — into a small window you can leave open with the timer panel closed. Click the pin again, or the window's ×, to close it.
 
 On login, Vana'Dial checks GitHub once (after a short delay) and prints a chat message if a newer version is available.
 
@@ -63,4 +68,4 @@ On login, Vana'Dial checks GitHub once (after a short delay) and prints a chat m
 
 ## Requirements
 
-- Ashita v4 with `imgui`, `settings`, and `ffxi` libs (standard Horizon XI Ashita install)
+- Ashita v4 with `imgui`, `settings`, and `ffxi` libs (standard Ashita v4 install)

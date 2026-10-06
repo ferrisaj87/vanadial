@@ -29,6 +29,7 @@ local UPDATE_RELATIVE = {
     'config.lua',
     'timers.lua',
     'sunbreeze.lua',
+    'popouts.lua',
     'data.lua',
     'libs/color.lua',
     'libs/imgui_compat.lua',

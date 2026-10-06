@@ -1,13 +1,13 @@
 --[[
 * Vana'Dial timer schedule data and per-real-second/minute cache.
 *
-* No rendering logic.  All public data (M.airships, M.boats, M.rse, M.lunar)
+* No rendering logic.  All public data (M.airships, M.boats, M.rse, M.lunar, M.guilds)
 * are pre-built arrays of plain Lua tables that the popup render loop can
 * iterate with zero computation and zero per-frame allocation.
 *
 * Optimisation contract
-*   • Call M.Update(osNow, vtMinuteOfDay, vtDay, moonDay) from the timers popup draw
-*     path only (skipped when the panel is closed).
+*   • Call M.Update(osNow, vtMinuteOfDay, vtDay, moonDay) while a timer surface
+*     is visible (the panel or a pop out). Skipped when none are open.
 *   • Airships + boats rebuild at most once per real second.
 *   • RSE + lunar rebuild at most once per real minute.
 ]]--
@@ -67,6 +67,8 @@ local C_CITY = {
     OOS            = {0.90, 0.30, 0.30, 1.0},  -- red
     ['OOS 2']      = {0.90, 0.30, 0.30, 1.0},
 };
+C_CITY.Windurst       = C_CITY.Windy;
+C_CITY["San d'Oria"]  = C_CITY.Sandy;
 local C_CITY_DEFAULT = {0.957, 0.855, 0.592, 1.0};  -- XIUI gold fallback
 
 local function CityColor(name)
@@ -87,10 +89,12 @@ local CF4_BOARDING = {0.267, 0.933, 0.533, 1.0};  -- 0xFF44EE88 boarding green
 local CF4_AWAITING = {0.500, 0.980, 0.720, 1.0};  -- 0xFF80FA88 lighter green (awaiting arrival)
 local CF4_SOON     = {1.0,   0.800, 0.267, 1.0};  -- 0xFFFFCC44 departure soon
 local CF4_WAITING  = {0.800, 0.800, 0.800, 1.0};  -- 0xFFCCCCCC waiting grey
+local CF4_ALERT    = {0.93,  0.27,  0.27,  1.0};  -- holiday due within 5 minutes
 local CF4_CL_TRANS = {0.510, 0.392, 0.055, 1.0};  -- 0xFF82640E CL/Manaclipper in-transit
 local CF4_CL_SVC   = {0.400, 0.733, 0.400, 1.0};  -- 0xFF66BB66 serviced soon
 local CF4_CL_OOS   = {0.800, 0.200, 0.200, 1.0};  -- 0xFFCC3333 out of service
 local CF4_DOCKING  = {0.400, 0.710, 1.000, 1.0};  -- boat docking (timer + status)
+local CF4_HOLIDAY_FAR = {1.0, 0.75, 0.75, 1.0};   -- next holiday, more than 1 VD day
 
 -- ── Schedule tables (VT minutes from midnight, 0-1439) ─────────────────────
 -- Store DEPARTURE TIMES only. The state machine derives everything else from
@@ -173,6 +177,90 @@ local BIBIKI_ROUTES = {
         },
     },
 };
+
+-- ── Guild shops ──────────────────────────────────────────────────────────────
+-- One row per craft. Hours are the daily [open, close) window.
+-- Holiday lines count down to that weekday. The shop is closed the
+-- whole holiday, so that day counts to the next morning's opening.
+-- Weekday index matches the clock: 0 = Firesday.
+local C_GUILD_ALCHEMY      = {0.62, 0.72, 1.00, 1.0};  -- water / lightning
+local C_GUILD_BONECRAFT    = {0.78, 0.86, 0.38, 1.0};  -- earth / wind
+local C_GUILD_CLOTHCRAFT   = {0.96, 0.84, 0.38, 1.0};  -- earth / wind
+local C_GUILD_COOKING      = {0.95, 0.38, 0.32, 1.0};  -- fire
+local C_GUILD_FISHING      = {0.32, 0.52, 0.95, 1.0};  -- deep blue
+local C_GUILD_GOLDSMITHING = {0.95, 0.78, 0.32, 1.0};  -- gold
+local C_GUILD_LEATHERCRAFT = {0.74, 0.50, 0.95, 1.0};  -- dark / earth
+local C_GUILD_SMITHING     = {0.86, 0.50, 0.30, 1.0};  -- bronze
+local C_GUILD_WOODWORKING  = {0.42, 0.78, 0.42, 1.0};  -- wind
+
+local GUILDS = {
+    { id='alchemy', name='Alchemy Guild Shop', nameColor=C_GUILD_ALCHEMY, openMin=480, closeMin=1380,
+      holidays={
+          { weekday=6, name='Lightsday',    colorKey='elementLight',     place='Bastok' },
+          { weekday=5, name='Lightningday', colorKey='elementLightning', place='Whitegate' },
+      } },
+    { id='bonecraft', name='Bonecraft Guild Shop', nameColor=C_GUILD_BONECRAFT, openMin=480, closeMin=1380,
+      holidays={ { weekday=3, name='Windsday', colorKey='elementWind', place='Windurst' } } },
+    { id='clothcraft', name='Clothcraft Guild Shop', nameColor=C_GUILD_CLOTHCRAFT, openMin=360, closeMin=1260,
+      holidays={ { weekday=0, name='Firesday', colorKey='elementFire', place='Windurst' } } },
+    { id='cooking', name='Cooking Guild Shop', nameColor=C_GUILD_COOKING, openMin=300, closeMin=1200,
+      holidays={ { weekday=7, name='Darksday', colorKey='elementDark', place='Windurst' } } },
+    { id='fishing', name='Fishing Guild Shop', nameColor=C_GUILD_FISHING, openMin=180, closeMin=1080,
+      holidays={
+          { weekday=5, name='Lightningday', colorKey='elementLightning', place='Windurst' },
+          { weekday=6, name='Lightsday',    colorKey='elementLight',     place='Whitegate' },
+      } },
+    { id='goldsmithing', name='Goldsmithing Guild Shop', nameColor=C_GUILD_GOLDSMITHING, openMin=480, closeMin=1380,
+      holidays={ { weekday=4, name='Iceday', colorKey='elementIce', place='Bastok' } } },
+    { id='leathercraft', name='Leathercraft Guild Shop', nameColor=C_GUILD_LEATHERCRAFT, openMin=180, closeMin=1080,
+      holidays={ { weekday=4, name='Iceday', colorKey='elementIce', place="San d'Oria" } } },
+    { id='smithing', name='Smithing Guild Shop', nameColor=C_GUILD_SMITHING, openMin=480, closeMin=1380,
+      holidays={ { weekday=2, name='Watersday', colorKey='elementWater', place="San d'Oria" } } },
+    { id='woodworking', name='Woodworking Guild Shop', nameColor=C_GUILD_WOODWORKING, openMin=360, closeMin=1260,
+      holidays={ { weekday=0, name='Firesday', colorKey='elementFire', place="San d'Oria" } } },
+};
+
+-- Stable list for the Guild Shops visibility menu. Names stay even before Update.
+M.guildChoices = {};
+for i = 1, #GUILDS do
+    GUILDS[i].shortName = (GUILDS[i].name:gsub(' Shop$', ''));
+    M.guildChoices[i] = {
+        id   = GUILDS[i].id,
+        name = (GUILDS[i].name:gsub(' Guild Shop$', '')),
+    };
+end
+
+function M.GuildShown(id)
+    local cfg = gConfig and gConfig.guildShops;
+    if not cfg or cfg[id] == nil then return true; end
+    return cfg[id] ~= false;
+end
+
+local function HolidayPillColor(secs)
+    if secs <= SOON_SECS then return CF4_ALERT; end
+    if secs <= VD_DAY_SEC then return CF4_SOON; end
+    return CF4_HOLIDAY_FAR;
+end
+
+-- Today - Opens in: red at the start of the holiday, blue as open time arrives.
+local function TodayOpenColor(dst, secs, openMin)
+    local span = VD_DAY_SEC + openMin * VD_MIN_F;
+    local t = 0;
+    if span > 0 then
+        t = secs / span;
+        if t > 1 then t = 1; elseif t < 0 then t = 0; end
+    end
+    local c = dst.todayColor;
+    if not c then
+        c = {0, 0, 0, 1};
+        dst.todayColor = c;
+    end
+    c[1] = CF4_DOCKING[1] + (CF4_ALERT[1] - CF4_DOCKING[1]) * t;
+    c[2] = CF4_DOCKING[2] + (CF4_ALERT[2] - CF4_DOCKING[2]) * t;
+    c[3] = CF4_DOCKING[3] + (CF4_ALERT[3] - CF4_DOCKING[3]) * t;
+    c[4] = 1;
+    return c;
+end
 
 -- ── The Carpenters' Landing Barge (Phanauet Channel) ────────────────────────
 -- Four routes run in a strict looping circuit.  Status is ALWAYS one of:
@@ -559,6 +647,116 @@ local function FillRowBi(dst, subDst, labelFwd, labelRev, vtMinuteOfDay, vtDay, 
 end
 
 
+-- Real seconds until a VT minute on vtDay + dayOffset. dayOffset 0 is today.
+local function SecsUntilGuild(targetVtMin, dayOffset, vtDay, osNow)
+    local ts = VANA_EPOCH + (vtDay + dayOffset) * VD_DAY_SEC + targetVtMin * VD_MIN_F;
+    return math.max(0, math.floor(ts - osNow));
+end
+
+local function FillGuildHoliday(dst, spec, guild, vtMin, vtDay, osNow)
+    dst.name = spec.name;
+    dst.place = spec.place;
+    dst.colorKey = spec.colorKey;
+    if spec.place and spec.place ~= '' then
+        dst.lineName = spec.place .. ' - ' .. spec.name;
+    else
+        dst.lineName = spec.name;
+    end
+    local today = vtDay % 8;
+    local delta = (spec.weekday - today) % 8;
+    dst.isToday = (delta == 0);
+    dst.placeColor = CityColor(spec.place);
+    dst.locClosed = dst.isToday;
+    local hoursOpen = vtMin >= guild.openMin and vtMin < guild.closeMin;
+    local secs;
+    if delta ~= 0 then
+        secs = SecsUntilGuild(0, delta, vtDay, osNow);
+        dst.countdownStr = 'Next Holiday in: ' .. FmtRealCountdown(secs);
+        dst.cdColor = HolidayPillColor(secs);
+    else
+        -- Closed for the whole holiday. Next opening is tomorrow morning.
+        secs = SecsUntilGuild(guild.openMin, 1, vtDay, osNow);
+        dst.countdownStr = 'Today - Opens in ' .. FmtRealCountdown(secs);
+        dst.cdColor = TodayOpenColor(dst, secs, guild.openMin);
+    end
+
+    local statusSecs;
+    local status;
+    local statusColor;
+    if dst.isToday then
+        statusSecs = SecsUntilGuild(guild.openMin, 1, vtDay, osNow);
+        status = 'Closed';
+        statusColor = (statusSecs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+    elseif hoursOpen then
+        statusSecs = SecsUntilGuild(guild.closeMin, 0, vtDay, osNow);
+        status = 'Open';
+        statusColor = (statusSecs < SOON_SECS) and CF4_SOON or CF4_BOARDING;
+    elseif vtMin >= guild.closeMin then
+        statusSecs = SecsUntilGuild(guild.openMin, 1, vtDay, osNow);
+        status = 'Closed';
+        statusColor = (statusSecs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+    else
+        statusSecs = SecsUntilGuild(guild.openMin, 0, vtDay, osNow);
+        status = 'Opens in';
+        statusColor = CF4_DOCKING;
+    end
+    dst.onHoliday = dst.isToday;
+    dst.pillText = status .. ' | ' .. FmtRealCountdown(statusSecs);
+    dst.statusColor = statusColor;
+end
+
+local function FillGuildRow(dst, guild, vtMin, vtDay, osNow)
+    dst.id = guild.id;
+    dst.name = guild.name;
+    dst.shortName = guild.shortName or guild.name;
+    dst.nameColor = guild.nameColor;
+
+    local today = vtDay % 8;
+    local hoursOpen = vtMin >= guild.openMin and vtMin < guild.closeMin;
+    local holsForStatus = guild.holidays;
+    local holidayToday = 0;
+    for i = 1, #holsForStatus do
+        if holsForStatus[i].weekday == today then holidayToday = holidayToday + 1; end
+    end
+    local allHoliday = #holsForStatus > 0 and holidayToday == #holsForStatus;
+    local anyOpen = hoursOpen and not allHoliday;
+
+    local secs;
+    if allHoliday then
+        secs = SecsUntilGuild(guild.openMin, 1, vtDay, osNow);
+        dst.cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+    elseif hoursOpen then
+        secs = SecsUntilGuild(guild.closeMin, 0, vtDay, osNow);
+        dst.cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_BOARDING;
+    elseif vtMin >= guild.closeMin then
+        secs = SecsUntilGuild(guild.openMin, 1, vtDay, osNow);
+        dst.cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+    else
+        secs = SecsUntilGuild(guild.openMin, 0, vtDay, osNow);
+        dst.cdColor = CF4_DOCKING;
+    end
+    dst.isOpen = anyOpen;
+    dst.allHoliday = allHoliday;
+    dst.countdownStr = FmtRealCountdown(secs);
+    local status;
+    if allHoliday or ((not hoursOpen) and vtMin >= guild.closeMin) then
+        status = 'Closed';
+    elseif hoursOpen then
+        status = 'Open';
+    else
+        status = 'Opens in';
+    end
+    dst.pillText = status .. ' | ' .. dst.countdownStr;
+
+    if not dst.holidays then dst.holidays = {}; end
+    local hols = guild.holidays;
+    dst.holidayCount = #hols;
+    for i = 1, #hols do
+        if not dst.holidays[i] then dst.holidays[i] = {}; end
+        FillGuildHoliday(dst.holidays[i], hols[i], guild, vtMin, vtDay, osNow);
+    end
+end
+
 -- Collapsing-header labels for boat sub-groups (used by popups + /vd boat commands).
 M.BOAT_GROUP = {
     FERRIES     = 'Boats  ',
@@ -574,6 +772,7 @@ M.airships = {};
 M.boats    = {};
 M.rse      = {};
 M.lunar    = {};
+M.guilds   = {};
 
 local BOAT_ROW_MAX = 24;
 
@@ -589,6 +788,9 @@ end
 for i = 1, 12 do
     if M.lunar[i] == nil then M.lunar[i] = {} end
 end
+for i = 1, #GUILDS do
+    M.guilds[i] = { holidays = { {}, {} } };
+end
 
 -- Pre-computed colour float4 tables exposed to render code (reference CF4_ tables, no extra allocation)
 M.colorBoarding = CF4_BOARDING;
@@ -603,6 +805,34 @@ M.colorGoldMuted= {0.72,  0.65,  0.46,  1.0};   -- gold-tinted grey for future l
 M.colorWhite    = {1.0,   1.0,   1.0,   1.0};
 M.colorGrey     = {0.78,  0.78,  0.78,  1.0};
 M.colorDimGrey  = {0.50,  0.50,  0.50,  1.0};
+M.colorTeal     = {0.35,  0.88,  0.78,  1.0};
+
+-- Player day colors (Vana'Dial element settings). Cached by ARGB so a settings
+-- change picks up a new table without rebuilding every frame.
+local ELEM_DEFAULT_ARGB = {
+    elementFire      = 0xFFFF4500,
+    elementEarth     = 0xFFB8860B,
+    elementWater     = 0xFF1E90FF,
+    elementWind      = 0xFF32CD32,
+    elementIce       = 0xFF87CEEB,
+    elementLightning = 0xFFBF5FFF,
+    elementLight     = 0xFFFFFFE0,
+    elementDark      = 0xFF2A0850,
+};
+local _dayColorCache = {};
+
+function M.DayColor(colorKey)
+    local fallback = ELEM_DEFAULT_ARGB[colorKey] or 0xFFFFFFFF;
+    local argb = fallback;
+    if GetColorSetting then
+        argb = GetColorSetting('vanaTime', colorKey, fallback) or fallback;
+    end
+    local hit = _dayColorCache[argb];
+    if hit then return hit; end
+    hit = ToF4(argb);
+    _dayColorCache[argb] = hit;
+    return hit;
+end
 
 -- Expose the shared countdown formatter for use in ui.lua (e.g. TOD timer).
 M.FmtCountdown = FmtRealCountdown;
@@ -655,6 +885,11 @@ function M.Update(osNow, vtMinuteOfDay, vtDay, moonDay)
             bi = bi + 1; FillCLRouteRow(b[bi], route, vtMinuteOfDay, vtDay, osNow);
         end
         for i = bi + 1, BOAT_ROW_MAX do b[i] = nil; end
+
+        local guilds = M.guilds;
+        for i, guild in ipairs(GUILDS) do
+            FillGuildRow(guilds[i], guild, vtMinuteOfDay, vtDay, osNow);
+        end
     end
 
     -- ── RSE + Lunar: rebuild every real minute ────────────────────────────────
