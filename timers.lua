@@ -782,7 +782,7 @@ end
 for i = 1, BOAT_ROW_MAX do
     M.boats[i] = {};
 end
-for i = 1, 5 do
+for i = 1, 8 do
     if M.rse[i] == nil then M.rse[i] = {} end
 end
 for i = 1, 12 do
@@ -896,7 +896,7 @@ function M.Update(osNow, vtMinuteOfDay, vtDay, moonDay)
     if osMin ~= _lastMin then
         _lastMin = osMin;
 
-        -- ── RSE: current slot + next 4 ───────────────────────────────────────
+        -- ── RSE: all 8 race slots (M/F Hume, Elvaan, Taru, plus Mithra and Galka) ──
         local secsPerSlot = 8 * VD_DAY_SEC;           -- 27648 s = 7.68 h per rotation
         local adj         = vtDay - RSE_ANCHOR_OFFSET;
         local dayInSlot   = adj % 8;
@@ -909,7 +909,7 @@ function M.Update(osNow, vtMinuteOfDay, vtDay, moonDay)
         local secsToNext  = math.floor(secsPerSlot - secInSlot);
 
         local rse = M.rse;
-        for i = 0, 4 do
+        for i = 0, 7 do
             local si = (slotIdx + i) % 8;
             local e = rse[i + 1];
             e.slotName = RSE_SLOTS[si] or '???';
