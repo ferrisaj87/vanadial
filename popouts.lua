@@ -333,7 +333,6 @@ end
 local function PlaceClose(id)
     local size = CloseSize();
     imgui.SameLine(0, 8);
-    AlignRight(size);
     return CloseButton(id, size);
 end
 
@@ -452,22 +451,19 @@ local function GuildLineWidth(e, hol)
     return groupW + 8 + PillSize(hol.pillText or '');
 end
 
-local function DrawGuildLocation(e, hol, id, center, reserve)
+local function HolidayLineWidth(hol)
+    local width = 12 + imgui.CalcTextSize('Holidays:') + 6 + imgui.CalcTextSize(hol.name or '');
+    if hol.countdownStr and hol.countdownStr ~= '' then
+        width = width + 8 + PillSize(hol.countdownStr);
+    end
+    return width;
+end
+
+local function DrawGuildLocation(e, hol, id)
     local muted = hol.onHoliday == true;
     local nameColor = muted and timers.colorDimGrey or (e.nameColor or timers.colorGold);
     local placeColor = muted and timers.colorDimGrey or (hol.placeColor or nameColor);
-    local label = e.shortName or e.name or '';
-    if center then
-        local avail = imgui.GetContentRegionAvail();
-        local groupW = GuildLineWidth(e, hol);
-        if type(avail) ~= 'number' then avail = groupW + (reserve or 0); end
-        local inner = math.max(groupW, avail - (reserve or 0));
-        local shift = (inner - groupW) * 0.5;
-        if shift > 0 then
-            imgui.SetCursorPosX(imgui.GetCursorPosX() + shift);
-        end
-    end
-    imgui.TextColored(nameColor, label);
+    imgui.TextColored(nameColor, e.shortName or e.name or '');
     if hol.place and hol.place ~= '' then
         imgui.SameLine(0, 4);
         imgui.TextColored(timers.colorDimGrey, '-');
@@ -494,20 +490,18 @@ local function DrawGuildLine(scope, e, id, withClose, onlyIndex)
     local placedClose = false;
     for h = 1, count do
         if not onlyIndex or h == onlyIndex then
-            local reserve = 0;
+            local hol = e.holidays[h];
             if withClose and not placedClose then
-                local avail = imgui.GetContentRegionAvail();
-                if type(avail) ~= 'number' then avail = closeSize; end
+                local nameW = GuildLineWidth(e, hol);
+                local contentW = math.max(nameW + closeSize + 8, HolidayLineWidth(hol));
                 local cursorX = imgui.GetCursorPosX();
                 local cursorY = imgui.GetCursorPosY();
-                local sx, sy = imgui.GetCursorScreenPos();
-                imgui.SetCursorScreenPos({sx + math.max(0, avail - closeSize), sy});
+                imgui.SetCursorPosX(cursorX + contentW - closeSize);
                 closed = CloseButton('card_' .. id, closeSize);
                 imgui.SetCursorPos({cursorX, cursorY});
-                reserve = closeSize + 8;
                 placedClose = true;
             end
-            DrawGuildLocation(e, e.holidays[h], id .. '_' .. h, true, reserve);
+            DrawGuildLocation(e, hol, id .. '_' .. h);
         end
     end
     return closed;
@@ -703,6 +697,107 @@ local function DrawBody(scope, key)
     return PlaceClose(key);
 end
 
+function M.OpenKeys()
+    return openOrder;
+end
+
+local POP_GROUP_LABELS = {
+    ['group:airships']    = 'Airships',
+    ['group:boats']       = 'Boats',
+    ['group:boatsall']    = 'All Boats',
+    ['group:manaclipper'] = 'Manaclipper',
+    ['group:barge']       = 'Barge',
+    ['group:rse']         = 'RSE',
+    ['group:lunar']       = 'Lunar Phases',
+    ['group:guilds']      = 'Guild Shops',
+};
+
+local LUNAR_PHASE_NAMES = {
+    [0]  = 'New Moon',
+    [1]  = 'Waxing Crescent',
+    [2]  = 'Waxing Crescent',
+    [3]  = 'First Quarter',
+    [4]  = 'Waxing Gibbous',
+    [5]  = 'Waxing Gibbous',
+    [6]  = 'Full Moon',
+    [7]  = 'Waning Gibbous',
+    [8]  = 'Waning Gibbous',
+    [9]  = 'Last Quarter',
+    [10] = 'Waning Crescent',
+    [11] = 'Waning Crescent',
+};
+
+local function RouteLabel(city1, city2, city3)
+    local label = city1 or '';
+    if city2 and city2 ~= '' then label = label .. ' > ' .. city2; end
+    if city3 and city3 ~= '' then label = label .. ' > ' .. city3; end
+    if label == '' then return nil; end
+    return label;
+end
+
+function M.Label(key)
+    local grouped = POP_GROUP_LABELS[key];
+    if grouped then return grouped; end
+    local airIndex = key:match('^air:(%d+)$');
+    if airIndex then
+        local row = timers.airships[tonumber(airIndex)];
+        local label = row and (RouteLabel(row.city1, row.city2) or row.label);
+        return label or ('Airship ' .. airIndex);
+    end
+    if key:sub(1, 5) == 'boat:' then
+        local c1, rest = key:sub(6):match('^([^>]*)>(.*)$');
+        local c2, rest2 = rest and rest:match('^([^>]*)>(.*)$');
+        local c3 = rest2 and rest2:match('^([^>]*)');
+        return RouteLabel(c1, c2, c3) or 'Boat';
+    end
+    local rseIndex = key:match('^rse:(%d+)$');
+    if rseIndex then
+        local row = timers.rse[tonumber(rseIndex)];
+        if row and row.slotName and row.slotName ~= '' then
+            if row.location and row.location ~= '' then
+                return row.slotName .. ' @ ' .. row.location;
+            end
+            return row.slotName;
+        end
+        return 'RSE ' .. rseIndex;
+    end
+    local phaseIdx = tonumber(key:match('^lunar:(%d+)$'));
+    if phaseIdx then
+        local row = FindLunar(phaseIdx);
+        local name = (row and row.phaseName ~= '' and row.phaseName) or LUNAR_PHASE_NAMES[phaseIdx];
+        if name then
+            if row and row.dateStr and row.dateStr ~= '' then
+                return name .. '  ' .. row.dateStr;
+            end
+            return name;
+        end
+        return 'Lunar ' .. phaseIdx;
+    end
+    local guildId, place = key:match('^guild:([^:]+):(.+)$');
+    if not guildId then guildId = key:match('^guild:(.+)$'); end
+    if guildId then
+        local name = guildId:gsub('^%l', string.upper);
+        if place and place ~= '' then return name .. ' - ' .. place; end
+        return name;
+    end
+    return key;
+end
+
+local function ClampScale(value, fallback)
+    local s = tonumber(value);
+    if not s then s = fallback; end
+    if s < 0.5 then return 0.5; end
+    if s > 4.0 then return 4.0; end
+    return s;
+end
+
+local function WindowScale(cfg, key)
+    local scales = cfg.popoutScales;
+    local custom = scales and tonumber(scales[key]);
+    if custom then return ClampScale(custom, 1.0); end
+    return ClampScale(cfg.vanaTimeScale, 1.0);
+end
+
 local function DefaultPos(key)
     local h = 0;
     for i = 1, #key do
@@ -715,7 +810,7 @@ local function DrawOne(key)
     local cfg = gConfig;
     if not cfg then return false; end
 
-    local scale = math.max(0.5, math.min(4.0, tonumber(cfg.vanaTimeScale) or 1.0));
+    local scale = WindowScale(cfg, key);
     local baseFont = math.max(8, math.min(48, tonumber(cfg.vanaTimeTimersFontSize) or 12));
     local fontSize = math.floor(baseFont * scale);
     local isGuildCard = key:sub(1, 6) == 'guild:';

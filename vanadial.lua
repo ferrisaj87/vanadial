@@ -24,7 +24,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.69';
+addon.version = '1.4.73';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -139,6 +139,7 @@ local defaults = T{
     },
     windowPositions  = T{},
     popoutsOpen      = T{},
+    popoutScales     = T{},
     colorCustomization = T{
         vanaTime = T{
             bgColor          = 0xFF000000,

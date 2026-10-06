@@ -10,6 +10,7 @@ local settings = require('settings');
 local imgui    = require('imgui');
 local Safe     = require('libs.imgui_safe');
 local data     = require('data');
+local popouts  = require('popouts');
 
 local M = {};
 local activeScope = nil;
@@ -463,6 +464,37 @@ function M.Draw(openFlag, setOpen)
                         imgui.Unindent(16);
                     end
                     imgui.Unindent(16);
+                end
+                imgui.Unindent(12);
+            end
+
+            imgui.Spacing();
+
+            if imgui.CollapsingHeader('Pop Outs##vt') then
+                imgui.Indent(12);
+                local keys = popouts.OpenKeys();
+                if not keys[1] then
+                    imgui.TextDisabled('Open a pop out to set its scale.');
+                else
+                    if not gConfig.popoutScales then gConfig.popoutScales = T{}; end
+                    local fallback = tonumber(gConfig.vanaTimeScale) or 1.0;
+                    for i = 1, #keys do
+                        local key = keys[i];
+                        local stored = tonumber(gConfig.popoutScales[key]);
+                        local v = T{ stored or fallback };
+                        imgui.Text(popouts.Label(key));
+                        imgui.SetNextItemWidth(180);
+                        if imgui.SliderFloat('##vdPopScale_' .. key, v, 0.5, 4.0, '%.2f') then
+                            gConfig.popoutScales[key] = v[1];
+                            SaveVanaDialSettings();
+                        end
+                        if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
+                            gConfig.popoutScales[key] = nil;
+                            SaveVanaDialSettings();
+                        end
+                        Tip('Scale for this pop out only. Double right-click to follow the main window scale.');
+                        if i < #keys then imgui.Spacing(); end
+                    end
                 end
                 imgui.Unindent(12);
             end
