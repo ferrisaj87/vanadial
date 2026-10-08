@@ -839,7 +839,7 @@ M.FmtCountdown = FmtRealCountdown;
 M.FmtVtTime    = FmtTime;
 
 -- ── M.Update ─────────────────────────────────────────────────────────────────
--- osNow         : os.time()  (integer Unix seconds)
+-- osNow         : data.GetUnixTime() (server-adjusted Unix seconds)
 -- vtMinuteOfDay : integer 0-1439
 -- vtDay         : integer (absolute VT day count since epoch)
 -- moonDay       : integer 0-83

@@ -771,7 +771,7 @@ end
 -- Keeps the shared timer cache current. Pop outs call this too, so a detached
 -- route keeps counting after the main timer panel closes.
 local function RefreshTimerData()
-    local osNow = os.time();
+    local osNow = data.GetUnixTime();
     if not timers.NeedsUpdate(osNow) then return; end
     local rawTime       = data.GetRawTime();
     local vtDay         = math.floor(rawTime / data.VD_DAY_SEC);

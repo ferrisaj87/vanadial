@@ -29,12 +29,9 @@ local M = {};
 -- 1 VD hour = 144  real seconds
 -- 1 VD min  = 2.4  real seconds
 -- Moon cycle = 84 VD days; day 0 = new moon, day 42 = full moon.
-M.VANA_EPOCH     = 1009810800; -- Canonical FFXI Vana'diel epoch (Unix ts). The game's own
-                               -- clock uses this exact value, so Vana'Dial tracks it in
-                               -- lockstep (both read the same system clock) and never drifts.
-                               -- Do NOT hand-tune this to fractional offsets: doing so only
-                               -- lines up while your PC clock is momentarily off, then desyncs
-                               -- again once Windows time service corrects the clock.
+M.VANA_EPOCH     = 1009810800; -- Canonical FFXI Vana'diel epoch (Unix ts). Do not
+                               -- hand-tune this. Clock skew is the server offset
+                               -- inside the client, not a bad epoch.
 M.VD_DAY_SEC     = 3456;
 M.VD_HOUR_SEC    = 144;
 M.VD_MIN_F       = 2.4;
@@ -45,20 +42,52 @@ M.VD_MOON_OFFSET = 80;
 
 -- ── Time math ─────────────────────────────────────────────────────────────────
 
--- Vana'diel time advances in lockstep with INTEGER Earth seconds. The game
--- increments the displayed VT minute only on whole-second boundaries — the
--- 2-2-3-2-3 Earth-second tick pattern that averages exactly 2.4 s per VT
--- minute (25 VT days per Earth day). os.time() is already an integer, so
--- subtracting the epoch here reproduces that stepping exactly and rolls the
--- minute at the same instant as the in-game clock.
+-- The in-game clock is not the PC clock. On zone-in the client stores the
+-- difference between the server's UTC and this PC, and the Vana'diel clock is
+-- computed from that adjusted time. os.time() alone drifts from it by however
+-- many seconds Windows and the server disagree — a few seconds is several
+-- Vana'diel minutes, and the gap changes whenever either clock is corrected.
 --
--- Do NOT re-introduce sub-second interpolation here: dividing a fractional
--- Earth-second by 2.4 crosses the VT-minute boundary early (at 2.4/4.8/7.2/
--- 9.6 s) instead of on the integer second the game uses, making the clock read
--- up to a full VT minute AHEAD. That oscillating error is unfixable by epoch
--- tuning, which is what caused the recurring desync.
+-- ntGameTimeGet (Ashita's ffxi.time) is that adjusted value, in Earth seconds
+-- since the Vana'diel epoch, already stepped on whole seconds. Sub-second
+-- interpolation is intentionally not used: it crosses the VT-minute boundary
+-- early and reads up to a minute ahead of the game.
+local timeLib = nil;
+local timeLibFailed = false;
+local SERVER_SKEW_MAX = 259200; -- 3 Earth days; real skew is seconds, not days
+
+local function ServerRawTime()
+    if timeLibFailed then return nil; end
+    if timeLib == nil then
+        local ok, lib = pcall(require, 'ffxi.time');
+        if not ok or not lib or not lib.get_game_time_raw then
+            timeLibFailed = true;
+            return nil;
+        end
+        timeLib = lib;
+    end
+    local ok, raw = pcall(timeLib.get_game_time_raw);
+    if not ok then return nil; end
+    raw = tonumber(raw);
+    if not raw then return nil; end
+    local now = os.time();
+    if math.abs(raw - (now - M.VANA_EPOCH)) <= SERVER_SKEW_MAX then
+        return raw;
+    end
+    if math.abs(raw - now) <= SERVER_SKEW_MAX then
+        return raw - M.VANA_EPOCH;
+    end
+    return nil;
+end
+
 function M.GetRawTime()
-    return os.time() - M.VANA_EPOCH;
+    return ServerRawTime() or (os.time() - M.VANA_EPOCH);
+end
+
+-- Same clock as GetRawTime, as a Unix timestamp. Countdowns must use this
+-- and not os.time(), or they drift by the server offset.
+function M.GetUnixTime()
+    return M.VANA_EPOCH + M.GetRawTime();
 end
 
 function M.GetTickMs()

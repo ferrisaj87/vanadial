@@ -24,7 +24,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.4.73';
+addon.version = '1.5.2';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -531,22 +531,35 @@ local function BeginZoning()
     _presentMenuOpen = false;
     _presentChatOpen = false;
     _menuChatTick = -1;
-    -- Weather object is torn down with the zone. Never keep a stale memory
-    -- pointer and never read it from present or a delayed zone task: pcall
-    -- cannot catch a C access violation from ashita.memory.read_*.
-    ResetWeatherState();
+    -- Do not clear weatherId here. Zone entry already carries the current
+    -- weather, and zone_change can run after that packet. Zeroing it made
+    -- every zone-in look like Clear until the next weather change.
 end
--- ── Weather (packet 0x057 only) ───────────────────────────────────────────────
--- Incoming 0x057 carries weather ID at byte offset 0x08. A memory fallback after
--- zone-in used a cached weather pointer that is invalid while zoning; reading it
--- takes down the renderer. Wait for the packet.
-local WEATHER_PKT_OFF = 9;   -- Lua 1-based index for packet byte 0x08
+-- ── Weather (packets only, never a memory read) ───────────────────────────────
+-- A cached weather pointer is invalid while zoning, and pcall cannot catch the
+-- access violation from ashita.memory.read_*. Both packets carry the id:
+--   0x00A zone-in / login : uint16 at 0x68 (the weather already in the zone)
+--   0x057 weather change  : uint8  at 0x08 (only sent when it changes)
+-- The client also accepts 0x14-0x27 as a duplicate of 0-19, so fold with % 20.
+local ZONE_IN_WEATHER_OFF = 0x68;
+local WEATHER_CHANGE_OFF  = 0x08;
 
-local function ReadWeatherFromPacket(data)
-    if type(data) ~= 'string' or #data < WEATHER_PKT_OFF then return nil end;
-    local w = data:byte(WEATHER_PKT_OFF);
-    if w and w >= 0 and w <= 19 then return w; end;
-    return nil;
+local function NormalizeWeatherId(id)
+    if id == nil or id < 0 then return nil end;
+    return math.floor(id) % 20;
+end
+
+local function ReadWeatherU8(data, offset)
+    if type(data) ~= 'string' or #data < offset + 1 then return nil end;
+    return NormalizeWeatherId(data:byte(offset + 1));
+end
+
+local function ReadWeatherU16(data, offset)
+    if type(data) ~= 'string' or #data < offset + 2 then return nil end;
+    local lo = data:byte(offset + 1);
+    local hi = data:byte(offset + 2);
+    if lo == nil or hi == nil then return nil end;
+    return NormalizeWeatherId(lo + hi * 256);
 end
 
 -- ── Game menu detection (for "Hide When Menu Open") ───────────────────────────
@@ -871,10 +884,14 @@ ashita.events.register('packet_in', 'vd_packet', function(e)
         TextureManager.ResetD3D8Device();
         display.InvalidateTextures();
         SchedulePointerResolve(2);
+        local w = ReadWeatherU16(e.data, ZONE_IN_WEATHER_OFF);
+        if w ~= nil then
+            weatherId = w;
+        end
         return;
     end
     if e.id == 0x057 then
-        local w = ReadWeatherFromPacket(e.data);
+        local w = ReadWeatherU8(e.data, WEATHER_CHANGE_OFF);
         if w ~= nil then
             weatherId = w;
         end
