@@ -96,6 +96,108 @@ local CF4_CL_OOS   = {0.800, 0.200, 0.200, 1.0};  -- 0xFFCC3333 out of service
 local CF4_DOCKING  = {0.400, 0.710, 1.000, 1.0};  -- boat docking (timer + status)
 local CF4_HOLIDAY_FAR = {1.0, 0.75, 0.75, 1.0};   -- next holiday, more than 1 VD day
 
+-- Ship and boat countdowns. Guild pills keep the tables above.
+-- Boarding: green, then orange, then red. Waiting stays dim.
+local CF4_BOARD_LATE = {1.000, 0.541, 0.239, 1.0};  -- #ff8a3d last minute of boarding
+local CF4_BOARD_END  = {0.933, 0.333, 0.333, 1.0};  -- #ee5555 last 20 seconds of boarding
+local CF4_IDLE       = {0.490, 0.478, 0.455, 1.0};  -- #7d7a74 waiting, nothing inbound
+
+local function Lerp(a, b, t)
+    if t < 0 then t = 0; elseif t > 1 then t = 1; end
+    return a + (b - a) * t;
+end
+
+local TRIP_RED   = {1.000, 0.604, 0.604}; -- #ff9a9a light red
+local TRIP_WHITE = {1.000, 1.000, 1.000};
+local TRIP_GOLD  = {0.910, 0.765, 0.416}; -- #e8c36a
+local TRIP_BLUE  = {0.302, 0.639, 1.000}; -- #4da3ff docking only
+local TRIP_TOWARD = {
+    TRIP_GOLD[1] + (TRIP_BLUE[1] - TRIP_GOLD[1]) * 0.62,
+    TRIP_GOLD[2] + (TRIP_BLUE[2] - TRIP_GOLD[2]) * 0.62,
+    TRIP_GOLD[3] + (TRIP_BLUE[3] - TRIP_GOLD[3]) * 0.62,
+};
+-- Awaiting arrival eases from gold toward boarding green, and stops short of it.
+local AWAIT_TOWARD = {
+    TRIP_GOLD[1] + (CF4_BOARDING[1] - TRIP_GOLD[1]) * 0.62,
+    TRIP_GOLD[2] + (CF4_BOARDING[2] - TRIP_GOLD[2]) * 0.62,
+    TRIP_GOLD[3] + (CF4_BOARDING[3] - TRIP_GOLD[3]) * 0.62,
+};
+local CF4_DOCK_ONLY = {TRIP_BLUE[1], TRIP_BLUE[2], TRIP_BLUE[3], 1.0};
+
+local function TripBody(secs, total)
+    if total < secs then total = secs; end
+    if total < 1 then total = 1; end
+    local p = (total - secs) / total;
+    local r, g, b;
+    if p <= 0.25 then
+        local t = p / 0.25;
+        r = Lerp(TRIP_RED[1], TRIP_WHITE[1], t);
+        g = Lerp(TRIP_RED[2], TRIP_WHITE[2], t);
+        b = Lerp(TRIP_RED[3], TRIP_WHITE[3], t);
+    elseif p <= 0.50 then
+        local t = (p - 0.25) / 0.25;
+        r = Lerp(TRIP_WHITE[1], TRIP_GOLD[1], t);
+        g = Lerp(TRIP_WHITE[2], TRIP_GOLD[2], t);
+        b = Lerp(TRIP_WHITE[3], TRIP_GOLD[3], t);
+    else
+        local t = (p - 0.50) / 0.50;
+        r = Lerp(TRIP_GOLD[1], TRIP_TOWARD[1], t);
+        g = Lerp(TRIP_GOLD[2], TRIP_TOWARD[2], t);
+        b = Lerp(TRIP_GOLD[3], TRIP_TOWARD[3], t);
+    end
+    return r, g, b;
+end
+
+local function PaintTrip(dst, r, g, b)
+    local c = dst.tripColor;
+    if not c then
+        c = {0, 0, 0, 1};
+        dst.tripColor = c;
+    end
+    c[1], c[2], c[3], c[4] = r, g, b, 1;
+    return c;
+end
+
+-- Light red to white over the first 25%, gold by 50%, then toward blue.
+-- The docking blue is applied only while the row is docking.
+local function TransitColor(dst, secs, total)
+    local r, g, b = TripBody(secs, total);
+    return PaintTrip(dst, r, g, b);
+end
+
+-- Awaiting arrival: gold at the start of the wait, toward boarding green
+-- by the time boarding opens. Boarding green is only while boarding.
+local function AwaitColor(dst, secs, total)
+    if total < secs then total = secs; end
+    if total < 1 then total = 1; end
+    local t = (total - secs) / total;
+    return PaintTrip(dst,
+        Lerp(TRIP_GOLD[1], AWAIT_TOWARD[1], t),
+        Lerp(TRIP_GOLD[2], AWAIT_TOWARD[2], t),
+        Lerp(TRIP_GOLD[3], AWAIT_TOWARD[3], t));
+end
+
+local FLASH_OFF = {1, 1, 1, 0.2};
+
+function M.FlashColor(color, urgent)
+    if not urgent or not color then return color; end
+    if (math.floor(os.clock() * 2.8) % 2) == 0 then return color; end
+    FLASH_OFF[1], FLASH_OFF[2], FLASH_OFF[3] = color[1], color[2], color[3];
+    return FLASH_OFF;
+end
+
+local function VtSpanSecs(fromVt, toVt)
+    local d = toVt - fromVt;
+    if d <= 0 then d = d + 1440; end
+    return d * VD_MIN_F;
+end
+
+local function BoardingColor(secs)
+    if secs <= 20 then return CF4_BOARD_END; end
+    if secs <= 60 then return CF4_BOARD_LATE; end
+    return CF4_BOARDING;
+end
+
 -- ── Schedule tables (VT minutes from midnight, 0-1439) ─────────────────────
 -- Store DEPARTURE TIMES only. The state machine derives everything else from
 -- two universal constants confirmed by Pyogenes live data:
@@ -441,13 +543,16 @@ end
 local function ApplyBoatDocking(dst, secs)
     if dst.isTransit and secs <= DOCK_EARTH_SECS then
         dst.isDocking = true;
-        dst.cdColor = CF4_DOCKING;
+        dst.cdColor = CF4_DOCK_ONLY;
         dst.countdownStr = FmtRealCountdown(secs);
+        dst.urgent = true;
     elseif dst.isTransit then
         dst.isDocking = false;
         dst.countdownStr = FmtRealCountdown(secs - DOCK_EARTH_SECS);
+        dst.urgent = (secs - DOCK_EARTH_SECS) <= DOCK_EARTH_SECS;
     else
         dst.isDocking = false;
+        dst.urgent = secs <= DOCK_EARTH_SECS;
     end
 end
 
@@ -459,7 +564,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
     for _, dep in ipairs(schedule) do
         if InFerryBoarding(vtMinuteOfDay, dep, boardVt) then
             local secs = SecsToVtMin(dep, vtMinuteOfDay, vtDay, osNow);
-            local cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_BOARDING;
+            local cdColor = BoardingColor(secs);
             dst.city1 = city1; dst.city1Color = CityColor(city1);
             dst.city2 = city2 or ''; dst.city2Color = CityColor(city2);
             dst.arrow = arrow or '<>';
@@ -474,7 +579,7 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
         if InFerryTransit(vtMinuteOfDay, dep, transitVt) then
             local finish = (dep + transitVt) % 1440;
             local secs = SecsToVtMin(finish, vtMinuteOfDay, vtDay, osNow);
-            local cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+            local cdColor = TransitColor(dst, secs, transitVt * VD_MIN_F);
             dst.city1 = city1; dst.city1Color = CityColor(city1);
             dst.city2 = city2 or ''; dst.city2Color = CityColor(city2);
             dst.arrow = arrow or '<>';
@@ -500,13 +605,14 @@ local function FillFerryRow(dst, city1, city2, vtMinuteOfDay, vtDay, osNow, sche
         dst.city1 = city1; dst.city1Color = CityColor(city1);
         dst.city2 = city2 or ''; dst.city2Color = CityColor(city2);
         dst.arrow = arrow or '<>';
-        dst.countdownStr = '--'; dst.cdColor = CF4_WAITING;
+        dst.countdownStr = '--'; dst.cdColor = CF4_IDLE;
         dst.isBoarding = false; dst.isTransit = false; dst.isEmpty = true;
         dst.isDocking = false;
+        dst.urgent = false;
         return;
     end
     local secs = SecsToVtMin(bestBoard, vtMinuteOfDay, vtDay, osNow);
-    local cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_WAITING;
+    local cdColor = CF4_IDLE;
     dst.city1 = city1; dst.city1Color = CityColor(city1);
     dst.city2 = city2 or ''; dst.city2Color = CityColor(city2);
     dst.arrow = arrow or '<>';
@@ -539,17 +645,19 @@ local function FillCLRouteRow(dst, route, vtMin, vtDay, osNow)
         local soonStart = (run.boarding - CL_SOON_VT + 1440) % 1440;
         if InVtInterval(vtMin, run.dep, run.arr) then
             local secs = SecsToVtMin(run.arr, vtMin, vtDay, osNow);
-            FillCLRow(dst, route, true, false, false, false, secs, CF4_CL_TRANS);
+            local span = run.arr - run.dep;
+            if span <= 0 then span = span + 1440; end
+            FillCLRow(dst, route, true, false, false, false, secs, TransitColor(dst, secs, span * VD_MIN_F));
             ApplyBoatDocking(dst, secs);
             return;
         elseif InVtInterval(vtMin, run.boarding, run.dep) then
             local secs = SecsToVtMin(run.dep, vtMin, vtDay, osNow);
-            FillCLRow(dst, route, false, true, false, false, secs, CF4_BOARDING);
+            FillCLRow(dst, route, false, true, false, false, secs, BoardingColor(secs));
             ApplyBoatDocking(dst, secs);
             return;
         elseif InVtInterval(vtMin, soonStart, run.boarding) then
             local secs = SecsToVtMin(run.boarding, vtMin, vtDay, osNow);
-            FillCLRow(dst, route, false, false, true, false, secs, CF4_CL_SVC);
+            FillCLRow(dst, route, false, false, true, false, secs, CF4_SOON);
             ApplyBoatDocking(dst, secs);
             return;
         end
@@ -570,8 +678,14 @@ end
 local function FillAirshipLeg(dst, lbl, realSecs, opts)
     local c1, c2 = lbl:match('^(%S+) > (%S+)$');
     local secs   = math.max(0, realSecs);
-    local cdColor = (secs < SOON_SECS) and CF4_SOON or CF4_WAITING;
-    if opts.boarding then cdColor = CF4_BOARDING end
+    local cdColor = CF4_IDLE;
+    if opts.boarding then
+        cdColor = BoardingColor(secs);
+    elseif opts.awaiting then
+        cdColor = AwaitColor(dst, secs, opts.total or secs);
+    elseif opts.transit then
+        cdColor = TransitColor(dst, secs, opts.total or secs);
+    end
     dst.label = lbl;
     dst.city1 = c1 or lbl; dst.city1Color = CityColor(c1);
     dst.city2 = c2 or '';  dst.city2Color = CityColor(c2);
@@ -579,6 +693,8 @@ local function FillAirshipLeg(dst, lbl, realSecs, opts)
     dst.isBoarding = opts.boarding or false;
     dst.isTransit = opts.transit or false;
     dst.isAwaiting = opts.awaiting or false;
+    dst.isDocking = false;
+    dst.urgent = secs <= DOCK_EARTH_SECS;
     dst.isEmpty = false;
 end
 
@@ -586,9 +702,9 @@ local function FillEmptyAirship(dst, lbl)
     dst.label = lbl;
     dst.city1 = lbl; dst.city1Color = CityColor(nil);
     dst.city2 = '';  dst.city2Color = CityColor(nil);
-    dst.countdownStr = '--'; dst.cdColor = CF4_WAITING;
+    dst.countdownStr = '--'; dst.cdColor = CF4_IDLE;
     dst.isBoarding = false; dst.isTransit = false;
-    dst.isAwaiting = false; dst.isEmpty = true;
+    dst.isAwaiting = false; dst.isDocking = false; dst.urgent = false; dst.isEmpty = true;
     dst.sub = nil;
 end
 
@@ -624,20 +740,23 @@ local function FillRowBi(dst, subDst, labelFwd, labelRev, vtMinuteOfDay, vtDay, 
         local phase = AirshipCyclePhase(vt, depF, depR, depFNext, boardR, boardF);
         if phase then
             local secsReturn = SecsToVtMin(returnHub, vt, vtDay, osNow);
+            local tripTotal = VtSpanSecs(depRev[i] - BOARD, returnHub);
             dst.isEmpty = false;
             dst.sub = subDst;
             if phase == 'fwd_await_hub' then
-                FillAirshipLeg(dst, labelRev, SecsToVtMin(boardR, vt, vtDay, osNow), { awaiting=true });
-                FillAirshipLeg(subDst, labelFwd, secsReturn, { transit=true });
+                local secs = SecsToVtMin(boardR, vt, vtDay, osNow);
+                FillAirshipLeg(dst, labelRev, secs, { awaiting=true, total=VtSpanSecs(depF, boardR) });
+                FillAirshipLeg(subDst, labelFwd, secsReturn, { transit=true, total=tripTotal });
             elseif phase == 'rev_board_hub' then
                 FillAirshipLeg(dst, labelRev, SecsToVtMin(depR, vt, vtDay, osNow), { boarding=true });
-                FillAirshipLeg(subDst, labelFwd, secsReturn, { transit=true });
+                FillAirshipLeg(subDst, labelFwd, secsReturn, { transit=true, total=tripTotal });
             elseif phase == 'fwd_await_city' then
-                FillAirshipLeg(dst, labelFwd, SecsToVtMin(boardF, vt, vtDay, osNow), { awaiting=true });
-                FillAirshipLeg(subDst, labelRev, secsReturn, { transit=true });
+                local secs = SecsToVtMin(boardF, vt, vtDay, osNow);
+                FillAirshipLeg(dst, labelFwd, secs, { awaiting=true, total=VtSpanSecs(depR, boardF) });
+                FillAirshipLeg(subDst, labelRev, secsReturn, { transit=true, total=tripTotal });
             else
                 FillAirshipLeg(dst, labelFwd, SecsToVtMin(depFNext, vt, vtDay, osNow), { boarding=true });
-                FillAirshipLeg(subDst, labelRev, secsReturn, { transit=true });
+                FillAirshipLeg(subDst, labelRev, secsReturn, { transit=true, total=tripTotal });
             end
             return;
         end
@@ -798,7 +917,7 @@ M.colorDocking  = CF4_DOCKING;
 M.colorAwaiting = CF4_AWAITING;
 M.colorSoon     = CF4_SOON;
 M.colorWaiting  = CF4_WAITING;
-M.colorServicedSoon  = {0.55, 0.95, 0.55, 1.0};   -- light green "Serviced Soon" label
+M.colorServicedSoon  = CF4_SOON;
 M.colorGold     = {0.957, 0.855, 0.592, 1.0};   -- standard XIUI gold (header text)
 M.colorGoldDark = {0.82,  0.64,  0.22,  1.0};   -- deeper/richer gold for active labels
 M.colorGoldMuted= {0.72,  0.65,  0.46,  1.0};   -- gold-tinted grey for future labels

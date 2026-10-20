@@ -248,9 +248,10 @@ local function CloseSize()
     return math.max(12, math.floor(imgui.GetTextLineHeight()));
 end
 
-local function DrawPill(id, text, color)
+local function DrawPill(id, text, color, urgent)
     text = text or '--';
-    color = color or timers.colorDimGrey;
+    local textColor = color or timers.colorDimGrey;
+    local borderColor = timers.FlashColor(textColor, urgent);
     local textW = imgui.CalcTextSize(text);
     local textH = imgui.GetTextLineHeight();
     local minTextW = imgui.CalcTextSize('00m 00s');
@@ -265,10 +266,10 @@ local function DrawPill(id, text, color)
     local rounding = pillH * 0.45;
     _pa[1] = x; _pa[2] = y; _pb[1] = x + pillW; _pb[2] = y + pillH;
     dl:AddRectFilled(_pa, _pb, imgui.GetColorU32(COL_PILL_BG), rounding);
-    dl:AddRect(_pa, _pb, imgui.GetColorU32(color), rounding, nil, 1.0);
+    dl:AddRect(_pa, _pb, imgui.GetColorU32(borderColor), rounding, nil, 1.0);
     _pa[1] = x + (pillW - textW) * 0.5;
     _pa[2] = y + (pillH - textH) * 0.5;
-    dl:AddText(_pa, imgui.GetColorU32(color), text);
+    dl:AddText(_pa, imgui.GetColorU32(textColor), text);
 end
 
 local function DrawCities(row)
@@ -298,10 +299,10 @@ end
 local function StatusOf(row)
     if row.isOOS then return 'Out of Service', COL_OOS; end
     if row.isServicedSoon then return 'Serviced Soon', timers.colorServicedSoon; end
-    if row.isAwaiting then return 'AWAITING', timers.colorAwaiting; end
-    if row.isBoarding then return 'BOARDING', timers.colorBoarding; end
-    if row.isDocking then return 'DOCKING', timers.colorDocking; end
-    if row.isTransit then return 'IN-TRANSIT', timers.colorGoldDark; end
+    if row.isAwaiting then return 'AWAITING', row.cdColor or timers.colorAwaiting; end
+    if row.isBoarding then return 'BOARDING', row.cdColor or timers.colorBoarding; end
+    if row.isDocking then return 'DOCKING', row.cdColor or timers.colorDocking; end
+    if row.isTransit then return 'IN-TRANSIT', row.cdColor or timers.colorGoldDark; end
     return nil, nil;
 end
 
@@ -338,7 +339,7 @@ end
 
 local function DrawRouteLine(row, id, withClose)
     local cdColor = (row.isEmpty or not row.cdColor) and timers.colorDimGrey or row.cdColor;
-    DrawPill(id, row.countdownStr, cdColor);
+    DrawPill(id, row.countdownStr, cdColor, row.urgent);
     imgui.SameLine(0, 8);
     DrawCities(row);
     local status, statusCol = StatusOf(row);

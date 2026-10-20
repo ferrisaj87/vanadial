@@ -412,9 +412,10 @@ local function DrawCollapseButton()
 end
 
 -- Countdown-first pill shared by every timer row.
-local function DrawTimerPill(id, text, color)
+local function DrawTimerPill(id, text, color, urgent)
     text = text or '--';
-    color = color or timers.colorDimGrey;
+    local textColor = color or timers.colorDimGrey;
+    local borderColor = timers.FlashColor(textColor, urgent);
     local textW = imgui.CalcTextSize(text);
     local textH = imgui.GetTextLineHeight();
     local minTextW = imgui.CalcTextSize('00m 00s');
@@ -430,16 +431,16 @@ local function DrawTimerPill(id, text, color)
     dl:AddRectFilled({x, y}, {x + pillW, y + pillH},
         imgui.GetColorU32(COL_PILL_BG), rounding);
     dl:AddRect({x, y}, {x + pillW, y + pillH},
-        imgui.GetColorU32(color), rounding, nil, 1.0);
+        imgui.GetColorU32(borderColor), rounding, nil, 1.0);
     dl:AddText(
         {x + (pillW - textW) * 0.5, y + (pillH - textH) * 0.5},
-        imgui.GetColorU32(color), text);
+        imgui.GetColorU32(textColor), text);
 end
 
 -- One transport route row: Countdown | Label | Status
 local function DrawRouteRow(row, id)
     local cdColor = (row.isEmpty or not row.cdColor) and timers.colorDimGrey or row.cdColor;
-    DrawTimerPill(id, row.countdownStr, cdColor);
+    DrawTimerPill(id, row.countdownStr, cdColor, row.urgent);
     imgui.SameLine(0, 8);
     if row.city1 then
         imgui.TextColored(row.city1Color, row.city1);
@@ -470,13 +471,13 @@ local function DrawRouteRow(row, id)
         imgui.TextColored(timers.colorServicedSoon, 'Serviced Soon');
     elseif row.isBoarding then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorBoarding, 'BOARDING');
+        imgui.TextColored(row.cdColor or timers.colorBoarding, 'BOARDING');
     elseif row.isDocking then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorDocking, 'DOCKING');
+        imgui.TextColored(row.cdColor or timers.colorDocking, 'DOCKING');
     elseif row.isTransit then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
+        imgui.TextColored(row.cdColor or timers.colorGoldDark, 'IN-TRANSIT');
     end
     popouts.PinButton(id, popouts.BoatKey(row));
 end
@@ -487,7 +488,7 @@ local function DrawAirshipLeg(leg, fontScale, id)
     if fontScale and fontScale ~= 1.0 and font then
         scope:PushFont(font, GetFontSizeBase() * fontScale);
     end
-    DrawTimerPill(id, leg.countdownStr, leg.cdColor or timers.colorDimGrey);
+    DrawTimerPill(id, leg.countdownStr, leg.cdColor or timers.colorDimGrey, leg.urgent);
     imgui.SameLine(0, 8);
     if leg.city1 then
         imgui.TextColored(leg.city1Color, leg.city1);
@@ -502,13 +503,13 @@ local function DrawAirshipLeg(leg, fontScale, id)
     end
     if leg.isAwaiting then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorAwaiting, 'AWAITING ARRIVAL');
+        imgui.TextColored(leg.cdColor or timers.colorAwaiting, 'AWAITING ARRIVAL');
     elseif leg.isBoarding then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorBoarding, 'BOARDING');
+        imgui.TextColored(leg.cdColor or timers.colorBoarding, 'BOARDING');
     elseif leg.isTransit then
         imgui.SameLine(0, 10);
-        imgui.TextColored(timers.colorGoldDark, 'IN-TRANSIT');
+        imgui.TextColored(leg.cdColor or timers.colorGoldDark, 'IN-TRANSIT');
     end
     end);
     if not ok then error(err); end
