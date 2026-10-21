@@ -247,6 +247,8 @@ local mainWinSize = {w=0, h=0};
 
 -- Deferred day-column tooltip: set during Begin/End, drawn after End() on foreground list
 local pendingDayTooltip = nil;
+-- Click a day column to open today-forward week, matching the site's All days.
+local weekOpen = false;
 
 -- Preview flags: set by config/vanatime.lua while sliders are dragged
 if _G.XIUI_weatherElementalPreview == nil then _G.XIUI_weatherElementalPreview = false; end
@@ -282,33 +284,67 @@ local function DrawPill(drawList, x, y, w, h, colU32, rounding)
 end
 
 -- Draw a single day column: icon + moon% + weakness badge
-local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay, alpha, iconSize, fontSize, colorConfig, showMoon, showBadge, disableIcons)
+local function FormatLocalTime(unix)
+    local lt = os.date('*t', unix);
+    if not lt then return ''; end
+    local h = lt.hour;
+    local ampm = (h >= 12) and 'PM' or 'AM';
+    local h12 = h % 12;
+    if h12 == 0 then h12 = 12; end
+    return string.format('%d:%02d %s', h12, lt.min, ampm);
+end
+
+local function FormatLocalClock(unix)
+    local lt = os.date('*t', unix);
+    if not lt then return ''; end
+    return os.date('%a', unix) .. ' ' .. FormatLocalTime(unix);
+end
+
+local function FormatLead(secs)
+    secs = math.max(0, math.floor(secs));
+    local h = math.floor(secs / 3600);
+    local m = math.floor((secs % 3600) / 60);
+    local s = secs % 60;
+    if h > 0 then return string.format('%dh %dm', h, m); end
+    if m > 0 then return string.format('%dm %02ds', m, s); end
+    return string.format('%ds', s);
+end
+
+local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay, alpha, iconSize, fontSize, colorConfig, showMoon, showBadge, disableIcons, timeLabel, scale)
+    scale = scale or 1;
+    local function S(n) return math.max(1, math.floor(n * scale)); end
     local badgeSize = math.floor(iconSize * BADGE_SCALE);
 
     local elemArgb = colorConfig[data.ELEM_KEYS[colWeekday]] or 0xFFFFFFFF;
 
-    local moonArrowSlot = showMoon and (math.floor(fontSize * 0.7) + 2) or 0;
-    local phaseIconSlot = showMoon and (math.floor(fontSize + 2) + 2) or 0;
-    local moonMaxW      = showMoon and (phaseIconSlot + _moonPctMeasW + moonArrowSlot) or 0;
-    local colContentW   = math.max(iconSize, moonMaxW + 4);
+    local moonPctW = (fontSize == _moonPctFontSz) and _moonPctMeasW or imtext.Measure('100%', fontSize);
+    local moonArrowSlot = showMoon and (math.floor(fontSize * 0.7) + S(2)) or 0;
+    local phaseIconSlot = showMoon and (math.floor(fontSize + S(2)) + S(2)) or 0;
+    local moonMaxW      = showMoon and (phaseIconSlot + moonPctW + moonArrowSlot) or 0;
+    local colContentW   = math.max(iconSize, moonMaxW + S(4));
+    if timeLabel and timeLabel ~= '' then
+        local tw = imtext.Measure(timeLabel, fontSize);
+        if tw > colContentW then colContentW = tw; end
+    end
 
     local iconY  = cy;
-    local moonY  = iconY + iconSize + 2;
+    local moonY  = iconY + iconSize + S(2);
 
-    local colH = showMoon
-        and (iconSize + 2 + fontSize + 4)
-        or  (iconSize + 4);
+    local timeExtra = (timeLabel and timeLabel ~= '') and (fontSize + S(4)) or 0;
+    local colH = (showMoon
+        and (iconSize + S(2) + fontSize + S(4))
+        or  (iconSize + S(4))) + timeExtra;
 
     -- Column card: dark background + element-colored border
-    local cardPad = 4;
+    local cardPad = S(4);
     local cardX   = cx - cardPad;
     local cardY   = cy - cardPad;
     local cardW   = colContentW + cardPad * 2;
     local cardH   = colH + cardPad * 2;
     DLRectFilled(drawList, cardX, cardY, cardX + cardW, cardY + cardH,
-        ToU32(WithAlpha(0xFF050510, 0.70 * alpha)), 6);
+        ToU32(WithAlpha(0xFF050510, 0.70 * alpha)), S(6));
     DLRect(drawList, cardX, cardY, cardX + cardW, cardY + cardH,
-        ToU32(WithAlpha(elemArgb, alpha)), 6, nil, alpha >= 0.95 and 1.5 or 1.0);
+        ToU32(WithAlpha(elemArgb, alpha)), S(6), nil, alpha >= 0.95 and 1.5 or 1.0);
 
     local iconX = cx + math.floor((colContentW - iconSize) / 2);
 
@@ -338,7 +374,7 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
         local textArgb    = WithAlpha(elemArgb, alpha);
         local moonW, _    = imtext.Measure(moonStr, fontSize);
 
-        local phaseIconSize = math.floor(fontSize + 2);
+        local phaseIconSize = math.floor(fontSize + S(2));
         local phaseTex = GetTexPtr(moonPhaseTextures[data.GetMoonPhaseRaw(moonDay)]);
 
         local moonArrowSize = math.floor(fontSize * 0.7);
@@ -348,8 +384,8 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
         elseif moonDay > 42 then
             moonArrowTex = GetTexPtr(moonDownTex);
         end
-        local arrowGap  = moonArrowTex and 2 or 0;
-        local phaseGap  = phaseTex and (phaseIconSize + 2) or 0;
+        local arrowGap  = moonArrowTex and S(2) or 0;
+        local phaseGap  = phaseTex and (phaseIconSize + S(2)) or 0;
 
         -- Center the entire group (phase icon + text + optional arrow) as a unit.
         -- Using only moonW would misplace the group whenever the arrow is absent (0% / 100%).
@@ -357,28 +393,28 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
         local groupLeft     = cx + math.floor((colContentW - totalMoonRowW) / 2);
         local moonTextX     = groupLeft + phaseGap;
 
-        local moonRowH  = fontSize + 4;
+        local moonRowH  = fontSize + S(4);
         local moonBaseY = moonY + math.floor((moonRowH - fontSize) / 2);
 
         -- Moon pill border for New Moon (blood red) and Full Moon (moonlit blue)
         local isNewMoonPhase  = (moonDay >= 80 or moonDay <= 2);
         local isFullMoonPhase = (moonDay >= 38 and moonDay <= 44);
         if isNewMoonPhase or isFullMoonPhase then
-            local pillPad   = 4;
+            local pillPad   = S(4);
             local pillX = groupLeft - pillPad;
-            local pillY = moonBaseY - 3;
+            local pillY = moonBaseY - S(3);
             local pillW = totalMoonRowW + pillPad * 2;
-            local pillH = fontSize + 6;
+            local pillH = fontSize + S(6);
             if isNewMoonPhase then
                 DrawPill(drawList, pillX, pillY, pillW, pillH,
-                    ToU32(WithAlpha(0xFF6B0000, 0.30 * alpha)), 4);
+                    ToU32(WithAlpha(0xFF6B0000, 0.30 * alpha)), S(4));
                 DLRect(drawList, pillX, pillY, pillX + pillW, pillY + pillH,
-                    ToU32(WithAlpha(0xFFCC2222, 0.85 * alpha)), 4, nil, 1.0);
+                    ToU32(WithAlpha(0xFFCC2222, 0.85 * alpha)), S(4), nil, 1.0);
             else
                 DrawPill(drawList, pillX, pillY, pillW, pillH,
-                    ToU32(WithAlpha(0xFF001833, 0.35 * alpha)), 4);
+                    ToU32(WithAlpha(0xFF001833, 0.35 * alpha)), S(4));
                 DLRect(drawList, pillX, pillY, pillX + pillW, pillY + pillH,
-                    ToU32(WithAlpha(0xFF4499FF, 0.85 * alpha)), 4, nil, 1.0);
+                    ToU32(WithAlpha(0xFF4499FF, 0.85 * alpha)), S(4), nil, 1.0);
             end
         end
 
@@ -432,6 +468,14 @@ local function DrawDayColumn(drawList, cx, cy, colWeekday, moonPercent, moonDay,
             ToU32(WithAlpha(0xFF8B1010, alpha)), 2, nil, 1.0);
     end
 
+    if timeExtra > 0 then
+        local tw = imtext.Measure(timeLabel, fontSize);
+        local tx = cx + math.floor((colContentW - tw) / 2);
+        local ty = cy + colH - timeExtra;
+        DrawTextWithOutline(drawList, timeLabel, tx, ty,
+            WithAlpha(0xFFD5D0C8, alpha), WithAlpha(0xFF000000, alpha), fontSize);
+    end
+
     return cardX, cardY, cardW, cardH;
 end
 
@@ -443,12 +487,18 @@ local function DayColumnTooltipsEnabled()
     return true;
 end
 
-local function DrawDayColumnTooltip(drawList, cardX, cardY, cardW, cardH, colWeekday, moonDay, moonPercent)
-    if not DayColumnTooltipsEnabled() then return; end
-    if not imgui.IsMouseHoveringRect({cardX, cardY}, {cardX + cardW, cardY + cardH}) then return; end
+local function DrawDayColumnTooltip(drawList, cardX, cardY, cardW, cardH, colWeekday, moonDay, moonPercent, startUnix, delta)
+    imgui.SetCursorScreenPos({cardX, cardY});
+    local clicked = imgui.InvisibleButton('##vdDay' .. tostring(delta), {cardW, cardH});
+    local hovered = imgui.IsItemHovered()
+        or imgui.IsMouseHoveringRect({cardX, cardY}, {cardX + cardW, cardY + cardH});
+    if clicked then weekOpen = not weekOpen; end
+    if not hovered then return; end
     DLRect(drawList, cardX, cardY, cardX + cardW, cardY + cardH,
         ToU32(0xCCFFFFFF), 6, nil, 2.0);
-    pendingDayTooltip = {colWeekday, moonDay, moonPercent};
+    if DayColumnTooltipsEnabled() then
+        pendingDayTooltip = {colWeekday, moonDay, moonPercent, startUnix};
+    end
 end
 
 -- Draw via a real ImGui window (Begin/End). Do NOT use GetForegroundDrawList +
@@ -471,7 +521,7 @@ local COL_TIP_LABEL  = {0.667, 0.667, 0.667, 1.0};
 
 local function DrawDayColumnTooltipWindow()
     if not pendingDayTooltip then return; end
-    local colWeekday, moonDay, moonPercent = pendingDayTooltip[1], pendingDayTooltip[2], pendingDayTooltip[3];
+    local colWeekday, moonDay, moonPercent, startUnix = pendingDayTooltip[1], pendingDayTooltip[2], pendingDayTooltip[3], pendingDayTooltip[4];
     pendingDayTooltip = nil;
 
     if not DayColumnTooltipsEnabled() then return; end
@@ -500,6 +550,14 @@ local function DrawDayColumnTooltipWindow()
     if visible then
         imgui.TextColored(COL_TIP_GOLD, dayName);
         imgui.Text(string.format('%s  (%d%%)', phaseName, moonPercent));
+        if startUnix then
+            local remain = startUnix - data.GetUnixTime();
+            if remain > 0 then
+                imgui.Text('Starts ' .. FormatLocalClock(startUnix) .. ' in ' .. FormatLead(remain));
+            else
+                imgui.Text('Started ' .. FormatLocalClock(startUnix));
+            end
+        end
 
         if showFenrir then
             local lc = data.LUNAR_CRY[phaseIdx];
@@ -677,13 +735,6 @@ function M.DrawWindow(weatherId)
     local moonDay       = (math.floor(rawTime / data.VD_DAY_SEC) + data.VD_MOON_OFFSET) % data.VD_MOON_DAYS;
     local moonPct       = data.CalcMoonPercent(moonDay);
 
-    local pastWeekday   = (weekday  - 1 + 8)                   % 8;
-    local futureWeekday = (weekday  + 1)                        % 8;
-    local pastMoonDay   = (moonDay  - 1 + data.VD_MOON_DAYS)   % data.VD_MOON_DAYS;
-    local futureMoonDay = (moonDay  + 1)                        % data.VD_MOON_DAYS;
-    local pastMoonPct   = data.CalcMoonPercent(pastMoonDay);
-    local futureMoonPct = data.CalcMoonPercent(futureMoonDay);
-
     -- ── Time string caches ───────────────────────────────────────────────────
     if vtHour ~= vtCache.hour or vtMin ~= vtCache.min then
         vtCache.hour  = vtHour;
@@ -762,9 +813,17 @@ function M.DrawWindow(weatherId)
         local outlineArgb = GetOutlineColor(weekday);
         local vtTextColor = cfg.vanaTimeVTElementColor and elemArgb or VT_TEXT_COLOR;
 
-        local CARD_PAD      = 4;
-        local SEP_GAP       = 4;
-        local sepArrowW     = math.floor(iconSize * 0.5);
+        local dayScale = weekOpen and 0.75 or 1;
+        local function S(n) return math.max(1, math.floor(n * dayScale)); end
+        local dayIconSize = math.floor(iconSize * dayScale);
+        local dayFontSize = math.floor(fontSize * dayScale);
+        if dayIconSize < 1 then dayIconSize = 1; end
+        if dayFontSize < 1 then dayFontSize = 1; end
+        local dayMoonPctW = (dayFontSize == _moonPctFontSz) and _moonPctMeasW or imtext.Measure('100%', dayFontSize);
+
+        local CARD_PAD      = S(4);
+        local SEP_GAP       = S(4);
+        local sepArrowW     = math.max(1, math.floor(dayIconSize * 0.5));
 
         local showPastFuture  = cfg.vanaTimeShowPastFuture ~= false;
         local showMoon        = cfg.vanaTimeShowMoonPercent ~= false;
@@ -772,17 +831,32 @@ function M.DrawWindow(weatherId)
         local plainDayIcons   = cfg.vanaTimePlainDayIcons == true;
         local pastFutureAlpha = cfg.vanaTimePastFutureOpacity or PAST_FUTURE_ALPHA;
 
-        local moonArrowSlot = showMoon and (math.floor(fontSize * 0.7) + 2) or 0;
-        local phaseIconSlot = showMoon and (math.floor(fontSize + 2) + 2) or 0;
-        local moonMaxW      = showMoon and (phaseIconSlot + _moonPctMeasW + moonArrowSlot) or 0;
-        local colContentW   = math.max(iconSize, moonMaxW + 4);
+        local moonArrowSlot = showMoon and (math.floor(dayFontSize * 0.7) + S(2)) or 0;
+        local phaseIconSlot = showMoon and (math.floor(dayFontSize + S(2)) + S(2)) or 0;
+        local moonMaxW      = showMoon and (phaseIconSlot + dayMoonPctW + moonArrowSlot) or 0;
+        local colContentW   = math.max(dayIconSize, moonMaxW + S(4));
         local cardW         = colContentW + CARD_PAD * 2;
-        local cardAreaW     = showPastFuture
-            and (cardW * 3 + SEP_GAP * 4 + sepArrowW * 2)
-            or  cardW;
+        local weekGap       = S(6);
+        local WEEK_COLS     = 4;
+        if weekOpen then
+            local timeW = imtext.Measure('12:45 PM', dayFontSize);
+            if timeW > colContentW then
+                colContentW = timeW;
+                cardW = colContentW + CARD_PAD * 2;
+            end
+        end
+        local sepSpan       = SEP_GAP * 2 + sepArrowW;
+        local cardAreaW     = weekOpen
+            and (WEEK_COLS * cardW + (WEEK_COLS - 1) * sepSpan)
+            or  (showPastFuture
+                and (cardW * 3 + SEP_GAP * 4 + sepArrowW * 2)
+                or  cardW);
 
         local clockH   = fontSize + 4;
-        local colH     = showMoon and (iconSize + 2 + fontSize + 4) or (iconSize + 4);
+        local iconColH = showMoon and (dayIconSize + S(2) + dayFontSize + S(4)) or (dayIconSize + S(4));
+        local singleColH = iconColH;
+        if weekOpen then singleColH = singleColH + dayFontSize + S(4); end
+        local colH     = weekOpen and (singleColH * 2 + weekGap + CARD_PAD * 4) or singleColH;
         local contentW = cardAreaW;
         local vtMeasW  = vtCache.measW;
         local ltMeasW  = ltStr ~= '' and ltCache.measW or 0;
@@ -799,6 +873,12 @@ function M.DrawWindow(weatherId)
         end
         if ltBelowColumns then
             totalH = totalH + clockH + 2;
+        end
+        if weekOpen then
+            local numIcons = (showTimers and 1 or 0) + (showGear and 1 or 0);
+            local iconZoneW = numIcons > 0 and (numIcons * clockH + (numIcons - 1) * 2 + 8) or 0;
+            local clockNeed = vtMeasW + ltMeasW + iconZoneW + 16;
+            if contentW < clockNeed then contentW = clockNeed; end
         end
 
         local cx0, cy0 = imgui.GetCursorScreenPos();
@@ -1004,52 +1084,72 @@ function M.DrawWindow(weatherId)
         -- ── Day columns ──────────────────────────────────────────────────────
         local colY   = cy0 + clockH + colPad;
         local cardX0 = cx0;
-
-        if showPastFuture then
-            local pastX = cardX0 + CARD_PAD;
-            local pcx, pcy, pcw, pch = DrawDayColumn(drawList, pastX, colY, pastWeekday,
-                pastMoonPct, pastMoonDay, pastFutureAlpha,
-                iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawDayColumnTooltip(drawList, pcx, pcy, pcw, pch, pastWeekday, pastMoonDay, pastMoonPct);
-
-            local arr1X   = pastX + colContentW + CARD_PAD + SEP_GAP;
-            local arrImgW = sepArrowW;
-            local arrImgH = math.floor(colH * 0.75);
-            local arr1Y   = colY + math.floor((colH - arrImgH) / 2);
-            local arrTex  = GetTexPtr(arrowRightTex);
-            local arrTint = ToU32(0xC0FFFFFF);
+        local unixNow = data.GetUnixTime();
+        local dayRem  = rawTime % data.VD_DAY_SEC;
+        local function DayStart(delta)
+            return unixNow - dayRem + delta * data.VD_DAY_SEC;
+        end
+        local function Wrap(n, m)
+            return (n % m + m) % m;
+        end
+        local function DayTimeLabel(delta)
+            if delta == 0 then return nil; end
+            return FormatLocalTime(DayStart(delta));
+        end
+        local function DrawSepArrow(ax, rowY)
+            local arrImgH = math.floor(iconColH * 0.75);
+            local arrY = rowY + math.floor((iconColH - arrImgH) / 2);
+            local arrTex = GetTexPtr(arrowRightTex);
             if arrTex then
-                DLImage(drawList, arrTex, arr1X,arr1Y, arr1X+arrImgW,arr1Y+arrImgH, arrTint);
+                DLImage(drawList, arrTex, ax, arrY, ax + sepArrowW, arrY + arrImgH, ToU32(0xC0FFFFFF));
             else
-                DrawTextWithOutline(drawList, COL_ARROW, arr1X, colY + math.floor((colH-fontSize)/2),
-                    0xFFFFFFFF, 0xFF000000, fontSize);
+                DrawTextWithOutline(drawList, COL_ARROW, ax, rowY + math.floor((iconColH - dayFontSize) / 2),
+                    0xFFFFFFFF, 0xFF000000, dayFontSize);
             end
+        end
+        local function PaintDay(delta, x, y, alpha, withTime)
+            local wd = Wrap(weekday + delta, 8);
+            local md = Wrap(moonDay + delta, data.VD_MOON_DAYS);
+            local pct = data.CalcMoonPercent(md);
+            local startAt = DayStart(delta);
+            local label = withTime and DayTimeLabel(delta) or nil;
+            local dcx, dcy, dcw, dch = DrawDayColumn(drawList, x, y, wd,
+                pct, md, alpha,
+                dayIconSize, dayFontSize, colorCfg, showMoon, showBadge, plainDayIcons, label, dayScale);
+            DrawDayColumnTooltip(drawList, dcx, dcy, dcw, dch, wd, md, pct, startAt, delta);
+        end
+
+        if weekOpen then
+            local rowPitch = singleColH + CARD_PAD * 2 + weekGap;
+            local colPitch = cardW + SEP_GAP * 2 + sepArrowW;
+            for i = 0, 7 do
+                local col = i % WEEK_COLS;
+                local row = math.floor(i / WEEK_COLS);
+                local x = cardX0 + CARD_PAD + col * colPitch;
+                local y = colY + row * rowPitch;
+                PaintDay(i, x, y, 1.0, true);
+                if col < WEEK_COLS - 1 then
+                    DrawSepArrow(x + colContentW + CARD_PAD + SEP_GAP, y);
+                end
+            end
+        elseif showPastFuture then
+            local pastX = cardX0 + CARD_PAD;
+            PaintDay(-1, pastX, colY, pastFutureAlpha, false);
+
+            local arr1X = pastX + colContentW + CARD_PAD + SEP_GAP;
+            DrawSepArrow(arr1X, colY);
 
             local curX = arr1X + sepArrowW + SEP_GAP + CARD_PAD;
-            local ccx, ccy, ccw, cch = DrawDayColumn(drawList, curX, colY, weekday,
-                moonPct, moonDay, 1.0,
-                iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawDayColumnTooltip(drawList, ccx, ccy, ccw, cch, weekday, moonDay, moonPct);
+            PaintDay(0, curX, colY, 1.0, false);
 
             local arr2X = curX + colContentW + CARD_PAD + SEP_GAP;
-            if arrTex then
-                DLImage(drawList, arrTex, arr2X,arr1Y, arr2X+arrImgW,arr1Y+arrImgH, arrTint);
-            else
-                DrawTextWithOutline(drawList, COL_ARROW, arr2X, colY + math.floor((colH-fontSize)/2),
-                    0xFFFFFFFF, 0xFF000000, fontSize);
-            end
+            DrawSepArrow(arr2X, colY);
 
             local futX = arr2X + sepArrowW + SEP_GAP + CARD_PAD;
-            local fcx, fcy, fcw, fch = DrawDayColumn(drawList, futX, colY, futureWeekday,
-                futureMoonPct, futureMoonDay, pastFutureAlpha,
-                iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawDayColumnTooltip(drawList, fcx, fcy, fcw, fch, futureWeekday, futureMoonDay, futureMoonPct);
+            PaintDay(1, futX, colY, pastFutureAlpha, false);
         else
             local cardOffX = math.floor((contentW - cardW) / 2);
-            local ccx, ccy, ccw, cch = DrawDayColumn(drawList, cardX0 + cardOffX + CARD_PAD, colY, weekday,
-                moonPct, moonDay, 1.0,
-                iconSize, fontSize, colorCfg, showMoon, showBadge, plainDayIcons);
-            DrawDayColumnTooltip(drawList, ccx, ccy, ccw, cch, weekday, moonDay, moonPct);
+            PaintDay(0, cardX0 + cardOffX + CARD_PAD, colY, 1.0, false);
         end
 
         -- LT below day columns when past/future is hidden
