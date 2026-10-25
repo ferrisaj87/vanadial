@@ -156,7 +156,7 @@ local VD_COMMANDS = {
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd guilds', 'Open the timers popup with Guild Shops expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd sunbreezerace', 'Toggle the independent Sunbreeze Racing event window.' },
-    { '/vd popout <group>', 'Open that timer group in its own window: ships, boats, boatsall, manaclipper, barge, rse, lunar, or guilds. Run it again to close. /vd popout close closes every pop out. Each timer row also has a pin that detaches just that route.' },
+    { '/vd popout <group>', 'Open that timer group in its own window: ships, boats, boatsall, manaclipper, barge, rse, lunar, or guilds. Run it again to close. /vd popout close closes every pop out, including the pocket. Each timer row has a pocket button that gathers routes into one window, and a pin that detaches just that route.' },
     { '/vd reset',  "Reset the Vana'Dial, Sunbreeze Racing, and timer pop out positions." },
     { '/vd update', 'Download the latest version from GitHub, then /addon reload vanadial.' },
     { '/vd checkupdate', 'Check whether a newer version is available on GitHub.' },
@@ -251,14 +251,43 @@ function M.Draw(openFlag, setOpen)
         _G.XIUI_weatherElementalPreview = true;
     end
 
+    local configLanding = VanaDial_ConfigLanding and VanaDial_ConfigLanding() or nil;
+    local popoutFocus = (configLanding == 'popout' and VanaDial_PopoutScaleFocus) and VanaDial_PopoutScaleFocus() or nil;
+    local generalFlags = (configLanding == 'general') and ImGuiTabItemFlags_SetSelected or nil;
+    local panelsFlags = (configLanding == 'popout') and ImGuiTabItemFlags_SetSelected or nil;
+
     local tabBarMark = scope:Mark();
     if scope:BeginTabBar('##vt_cfg_tabs') then
 
         -- ── General tab ───────────────────────────────────────────────────────
         local tabMark = scope:Mark();
-        if scope:BeginTabItem('General') then
+        if scope:BeginTabItem('General', nil, generalFlags) then
 
             CB('Enabled', 'showVanaDial');
+            CB('Minimalist Mode', 'vanaTimeMinimalist');
+            Tip("Show a single compact bar: Vana'diel time, today's element, moon %, tomorrow, and zone weather. The full window opens on hover or click, then returns after the Return Delay.");
+            if gConfig.vanaTimeMinimalist == true then
+                imgui.Indent(16);
+                local scaleBefore = tonumber(gConfig.vanaTimeMinimalScale) or 1.0;
+                SF('Minimalist Scale##vt', 'vanaTimeMinimalScale', 0.5, 4.0, '%.2f', 1.0);
+                if imgui.IsItemActive() or (tonumber(gConfig.vanaTimeMinimalScale) or 1.0) ~= scaleBefore then
+                    if VanaDial_PreviewMinimalScale then VanaDial_PreviewMinimalScale(); end
+                end
+                Tip("Scale for the compact bar only. Dragging this shows the bar, then the full window returns after a short delay. Double right-click to reset.");
+                Combo('Open full window##vtmin', 'vanaTimeMinimalExpand',
+                    T{ 'On Hover', 'On Click' },
+                    T{ 'hover', 'click' },
+                    'hover', 120);
+                Tip('On Hover opens the full window while the cursor is over the bar. On Click opens it with a short click. A drag still moves the window.');
+                Combo('Expand##vtminDir', 'vanaTimeMinimalExpandDir',
+                    T{ 'Down', 'Up' },
+                    T{ 'down', 'up' },
+                    'down', 90);
+                Tip('Down opens the full window below the bar. Up opens it above the bar. The bar stays on the anchored edge.');
+                SI('Return Delay##vtmin', 'vanaTimeMinimalDelay', 0, 60, 5);
+                Tip('Seconds to keep the full window open after the cursor leaves. 0 returns as soon as the cursor leaves. Double right-click to reset.');
+                imgui.Unindent(16);
+            end
             CB('Hide When Menu Open', 'vanaTimeHideOnMenuFocus');
             Tip('Hide this module when a game menu is open (equipment, map, etc.).');
             imgui.Indent(16);
@@ -275,8 +304,10 @@ function M.Draw(openFlag, setOpen)
                 imgui.Indent(12);
                 SF('Scale##vt',     'vanaTimeScale',    0.5, 4.0, '%.2f', 1.0);
                 Tip("Global scale for the entire Vana'Dial window. Double right-click to reset.");
-                SI('Font Size##vt', 'vanaTimeFontSize',  8, 48, 12);
-                Tip("Font size for clock and moon phase text. Double right-click to reset.");
+                SI('VD Time Font##vt', 'vanaTimeFontSize',  8, 48, 12);
+                Tip("Font size for the Vana'diel clock only. Double right-click to reset.");
+                SI('Other Fonts##vt', 'vanaTimeTextFontSize', 8, 48, math.floor(tonumber(gConfig.vanaTimeFontSize) or 12));
+                Tip('Font size for local time, moon percent, and day labels. Double right-click to match the Vana\'diel clock.');
                 CB('Bold Font##vt', 'vanaTimeFontBold');
                 Tip('Use Tahoma Bold for clock text (matches XIUI default fontWeight). Turn off if your XIUI global font is Normal.');
                 SI('Icon Size##vt', 'vanaTimeIconSize',  16, 128, 28);
@@ -327,7 +358,7 @@ function M.Draw(openFlag, setOpen)
 
         -- ── Panels tab ────────────────────────────────────────────────────────
         tabMark = scope:Mark();
-        if scope:BeginTabItem('Panels') then
+        if scope:BeginTabItem('Panels', nil, panelsFlags) then
 
             -- Time of Day
             if imgui.CollapsingHeader('Time of Day Tab##vt', ImGuiTreeNodeFlags_DefaultOpen) then
@@ -391,8 +422,20 @@ function M.Draw(openFlag, setOpen)
                         CB('Adjust Size for Elemental Weather##wx', 'vanaTimeWeatherAdjustElemental');
                         Tip('Elemental weather icons display larger than basic weather.');
                     end
+                    local wxFallback = tonumber(gConfig.vanaTimeScale) or 1.0;
+                    local wxStored = tonumber(gConfig.vanaTimeWeatherScale);
+                    local wxScale = T{ wxStored or wxFallback };
+                    if imgui.SliderFloat('Scale##wxScale', wxScale, 0.5, 4.0, '%.2f') then
+                        gConfig.vanaTimeWeatherScale = wxScale[1];
+                        SaveVanaDialSettings();
+                    end
+                    if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
+                        gConfig.vanaTimeWeatherScale = nil;
+                        SaveVanaDialSettings();
+                    end
+                    Tip('Size of the zone weather tab only. Double right-click to follow the main window scale.');
                     CB('Individual Scaling##wx', 'vanaTimeWeatherCustomScale');
-                    Tip('Use a separate icon size for the Weather tab.');
+                    Tip('Use a separate icon size for the Weather tab. Multiplied by the weather scale above.');
                     if gConfig.vanaTimeWeatherCustomScale then
                         imgui.Indent(16);
                         if not hideNonElem then
@@ -470,6 +513,9 @@ function M.Draw(openFlag, setOpen)
 
             imgui.Spacing();
 
+            if popoutFocus then
+                imgui.SetNextItemOpen(true, ImGuiCond_Always);
+            end
             if imgui.CollapsingHeader('Pop Outs##vt') then
                 imgui.Indent(12);
                 local keys = popouts.OpenKeys();
@@ -483,6 +529,9 @@ function M.Draw(openFlag, setOpen)
                         local stored = tonumber(gConfig.popoutScales[key]);
                         local v = T{ stored or fallback };
                         imgui.Text(popouts.Label(key));
+                        if popoutFocus == key then
+                            imgui.SetScrollHereY(0.25);
+                        end
                         imgui.SetNextItemWidth(180);
                         if imgui.SliderFloat('##vdPopScale_' .. key, v, 0.5, 4.0, '%.2f') then
                             gConfig.popoutScales[key] = v[1];
@@ -498,7 +547,6 @@ function M.Draw(openFlag, setOpen)
                 end
                 imgui.Unindent(12);
             end
-
         end
         scope:CloseTo(tabMark);
 
@@ -546,6 +594,9 @@ function M.Draw(openFlag, setOpen)
             if not colorCfg then
                 imgui.TextDisabled('Color config not available.');
             else
+                ColorPicker('VD Clock##vt', colorCfg, 'vtClockColor',
+                    "Color of the Vana'diel clock. With VT Time matches Element Color on, the day's element color is used.");
+                imgui.Spacing();
                 -- Background
                 if imgui.CollapsingHeader('Background Colors##vt', ImGuiTreeNodeFlags_DefaultOpen) then
                     imgui.Indent(12);
@@ -620,6 +671,9 @@ function M.Draw(openFlag, setOpen)
 
     end
     scope:CloseTo(tabBarMark);
+    if configLanding and VanaDial_ClearConfigLanding then
+        VanaDial_ClearConfigLanding();
+    end
 
     end
     end);

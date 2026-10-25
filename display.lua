@@ -11,6 +11,9 @@
 *   │ │[↓][weak] │   │  [↓][weak]     │   │[↓][weak] │       │
 *   │ └──────────┘   └────────────────┘   └──────────┘       │
 *   └─────────────────────────────────────────────────────────┘
+*
+* Minimalist mode collapses that to one row, with its own scale:
+*   07:49  (day) 57%  >  (day) 60%      [weather]
 ]]--
 
 require('common');
@@ -225,6 +228,7 @@ local vtCache    = { hour=-1, min=-1, str='', measW=0 };
 local ltCache    = { osMin=-1, osHour=-1, str='', measW=0 };
 local lastOsTime   = -1;
 local lastFontSize = -1;
+local lastVtFontSize = -1;
 
 -- Full bright/dim cycle for new/full moon % text (and weather-test preview pulse).
 local MOON_PULSE_PERIOD = 2.8;
@@ -703,6 +707,378 @@ function M.StageMainWindowPosition()
     return true;
 end
 
+-- ── Minimalist bar ────────────────────────────────────────────────────────────
+
+local MOON_WAX_COLOR   = 0xFF3DDC6A;
+local MOON_WANE_COLOR  = 0xFFFF5050;
+local MINIMAL_DELAY_DEFAULT = 5;
+-- After the scale slider is released, keep the compact bar up this long
+-- so the new size can be seen before the full window returns.
+local SCALE_PREVIEW_HOLD = 2.0;
+-- Stay hovered while a button is held or a popup covers the window, so a
+-- click on the timer or settings icon can finish.
+local MINIMAL_HOVER_FLAGS = bit.bor(
+    rawget(_G, 'ImGuiHoveredFlags_AllowWhenBlockedByPopup') or 32,
+    rawget(_G, 'ImGuiHoveredFlags_AllowWhenBlockedByActiveItem') or 128
+);
+
+local minimalExpanded   = false;
+local minimalLatched    = false;
+local minimalSawDrag    = false;
+local minimalLeftAt     = nil;
+local minimalLastInteract = 0;
+local minimalScalePreviewUntil = 0;
+local minimalScaleWasExpanded = false;
+local expandAnchorBottom = nil;
+local lastExpandContentH = nil;
+
+local minimalFontCache = { size = -1, pctW = 0 };
+local minimalTimeCache = { key = '', size = -1, w = 0, str = '' };
+
+local function ConfigIsOpen()
+    return VanaDial_IsConfigOpen and VanaDial_IsConfigOpen();
+end
+
+local function MinimalShowFull(cfg)
+    if cfg.vanaTimeMinimalist ~= true then return true; end
+    if NowSeconds() < minimalScalePreviewUntil then return false; end
+    return minimalExpanded;
+end
+
+VanaDial_PreviewMinimalScale = function()
+    local now = NowSeconds();
+    if minimalScalePreviewUntil <= now then
+        minimalScaleWasExpanded = minimalExpanded;
+    end
+    minimalExpanded = false;
+    minimalLatched = true;
+    minimalScalePreviewUntil = now + SCALE_PREVIEW_HOLD;
+end;
+
+local function IsNewMoonPhase(moonDay)
+    return moonDay >= 80 or moonDay <= 2;
+end
+
+local function IsFullMoonPhase(moonDay)
+    return moonDay >= 38 and moonDay <= 44;
+end
+
+local function MoonPercentArgb(moonDay, colorCfg)
+    local base;
+    if moonDay > 0 and moonDay < 42 then
+        base = MOON_WAX_COLOR;
+    elseif moonDay > 42 then
+        base = MOON_WANE_COLOR;
+    elseif IsNewMoonPhase(moonDay) then
+        base = tonumber(colorCfg.moonNewColor) or 0xFFFF4444;
+    else
+        base = tonumber(colorCfg.moonFullColor) or 0xFF88CCFF;
+    end
+    if IsNewMoonPhase(moonDay) or IsFullMoonPhase(moonDay) then
+        base = LerpArgbHsv(base, 0xFFFFFFFF, GetMoonPulse());
+    end
+    return base;
+end
+
+local function MoonTip(moonDay, pct)
+    local phase = data.PHASE_NAMES[data.GetMoonPhaseRaw(moonDay)] or 'Moon';
+    local trend = '';
+    if moonDay > 0 and moonDay < 42 then
+        trend = '  ·  Waxing';
+    elseif moonDay > 42 then
+        trend = '  ·  Waning';
+    end
+    return string.format('%s  (%d%%)%s', phase, pct, trend);
+end
+
+local function MinimalReturnDelay(cfg)
+    local delay = tonumber(cfg.vanaTimeMinimalDelay);
+    if delay == nil then delay = MINIMAL_DELAY_DEFAULT; end
+    if delay < 0 then delay = 0; end
+    if delay > 60 then delay = 60; end
+    return delay;
+end
+
+local function UpdateMinimalMode(cfg, hovered)
+    if cfg.vanaTimeMinimalist ~= true then
+        minimalExpanded = false;
+        minimalLatched = false;
+        minimalSawDrag = false;
+        minimalLeftAt = nil;
+        return;
+    end
+
+    local now = NowSeconds();
+    if minimalScalePreviewUntil > 0 then
+        if now < minimalScalePreviewUntil then
+            minimalExpanded = false;
+            return;
+        end
+        minimalExpanded = minimalScaleWasExpanded;
+        minimalLastInteract = now;
+        minimalLatched = false;
+        minimalScalePreviewUntil = 0;
+    end
+
+    local sawDrag = minimalSawDrag;
+    if imgui.IsMouseDragging(0, 4.0) then
+        sawDrag = true;
+        minimalSawDrag = true;
+    end
+
+    local clicked = false;
+    if imgui.IsMouseReleased(0) then
+        clicked = hovered and not sawDrag;
+        minimalSawDrag = false;
+    end
+
+    -- Settings stay put: a visible bar keeps previewing its scale, and an
+    -- already-open full window does not snap shut while the cursor is in config.
+    local delay = MinimalReturnDelay(cfg);
+
+    if ConfigIsOpen() then
+        minimalLeftAt = nil;
+        if minimalExpanded then
+            minimalLastInteract = now;
+        end
+        return;
+    end
+
+    if not hovered then
+        -- Mouse-down still belongs to the timer/settings button. Collapsing
+        -- here destroys that button before the click can register.
+        if minimalExpanded and imgui.IsMouseDown(0) then
+            minimalLastInteract = now;
+            minimalLeftAt = nil;
+            return;
+        end
+        -- Brief gap between the clock and the timers panel.
+        if minimalExpanded and popups.IsTimersOpen() and (now - minimalLastInteract) <= 0.4 then
+            return;
+        end
+        if minimalExpanded then
+            if minimalLeftAt == nil then
+                minimalLeftAt = now;
+            end
+            if (now - minimalLeftAt) < delay then
+                return;
+            end
+        end
+        minimalExpanded = false;
+        minimalLatched = false;
+        minimalLeftAt = nil;
+        return;
+    end
+
+    minimalLeftAt = nil;
+
+    local moved = clicked or sawDrag;
+    local io = imgui.GetIO();
+    if io then
+        local delta = io.MouseDelta;
+        if delta and ((delta.x or 0) ~= 0 or (delta.y or 0) ~= 0) then
+            moved = true;
+        end
+        if (io.MouseWheel or 0) ~= 0 or (io.MouseWheelH or 0) ~= 0 then
+            moved = true;
+        end
+    end
+    if moved then
+        minimalLastInteract = now;
+    end
+
+    local mode = cfg.vanaTimeMinimalExpand or 'hover';
+    if minimalLatched then
+        if clicked then
+            minimalLatched = false;
+            minimalExpanded = true;
+            minimalLastInteract = now;
+        end
+        return;
+    end
+
+    if not minimalExpanded then
+        if mode == 'hover' or (mode == 'click' and clicked) then
+            minimalExpanded = true;
+            minimalLastInteract = now;
+        end
+        return;
+    end
+
+    if delay > 0 and (now - minimalLastInteract) > delay then
+        minimalExpanded = false;
+        minimalLatched = true;
+    end
+end
+
+local function ResolveBarWeather(cfg, weatherId)
+    if cfg.vanaTimeShowWeather == false then
+        _G.XIUI_weatherTestExpiry = 0;
+        return nil, 1;
+    end
+    local testId, testAlpha = nil, 1;
+    if cfg.vanaTimeWeatherHideNonElemental then
+        if NowSeconds() < (_G.XIUI_weatherTestExpiry or 0) then
+            testId = 4;
+            testAlpha = 0.35 + 0.65 * GetMoonPulse();
+        end
+    else
+        _G.XIUI_weatherTestExpiry = 0;
+    end
+    local id = testId or weatherId;
+    local enabled = ((weatherId or -1) >= 0
+        and not (cfg.vanaTimeWeatherHideNonElemental and weatherId < 4))
+        or testId ~= nil;
+    if not enabled or id == nil or data.WEATHER_TO_ELEMENT[id] == nil then
+        return nil, 1;
+    end
+    return id, testId and testAlpha or 1;
+end
+
+-- Compact bar: HH:MM, today dot, moon %, arrow, tomorrow dot, moon %, weather.
+-- Returns content width and height (window padding is applied by the caller).
+local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, weekday, moonDay, weatherId, scale, colPad)
+    local function S(n) return math.max(1, math.floor(n * scale)); end
+    local fontSize = math.max(8, math.floor(13 * scale));
+    local gap = S(5);
+    local weatherGap = math.max(S(22), math.floor(fontSize * 1.8));
+    local contentH = fontSize + 4;
+    local dotR = math.max(3, math.floor(fontSize * 0.30));
+    local arrowH = math.max(7, math.floor(contentH * 0.62));
+    local arrowW = math.max(7, math.floor(arrowH * 0.85));
+
+    local timeKey = vtHour * 60 + vtMin;
+    if minimalTimeCache.key ~= timeKey or minimalTimeCache.size ~= fontSize then
+        minimalTimeCache.key = timeKey;
+        minimalTimeCache.size = fontSize;
+        minimalTimeCache.str = string.format('%02d:%02d', vtHour, vtMin);
+        minimalTimeCache.w = imtext.Measure(minimalTimeCache.str, fontSize);
+    end
+    if minimalFontCache.size ~= fontSize then
+        minimalFontCache.size = fontSize;
+        minimalFontCache.pctW = imtext.Measure('100%', fontSize);
+    end
+    local timeW = minimalTimeCache.w;
+    local pctW = minimalFontCache.pctW;
+    local dotD = dotR * 2;
+
+    local wxId, wxAlpha = ResolveBarWeather(cfg, weatherId);
+    local wxTex, wxDouble = nil, false;
+    local wxIcon = contentH;
+    local wxW = 0;
+    if wxId ~= nil then
+        wxTex = GetTexPtr(textures[data.WEATHER_TO_ELEMENT[wxId]]);
+        wxDouble = (wxId % 2 ~= 0) and wxId >= 5;
+        if wxTex then
+            wxW = wxIcon + (wxDouble and (S(2) + wxIcon) or 0);
+        end
+    end
+
+    local contentW = timeW + gap + dotD + gap + pctW + gap + arrowW + gap + dotD + gap + pctW;
+    if wxTex then
+        contentW = contentW + weatherGap + wxW;
+    end
+
+    local bgPad = colPad or 8;
+    local bgX, bgY = cx0 - bgPad, cy0 - bgPad;
+    local bgW, bgH = contentW + bgPad * 2, contentH + bgPad * 2;
+    local bgRgb = colorCfg.bgColor or 0xFF000000;
+    local bgOpacity = ResolveBackgroundOpacity(cfg, bgRgb);
+    local opaqueU32 = ToU32(WithAlpha(bgRgb, bgOpacity));
+    local transpU32 = ToU32(WithAlpha(bgRgb, 0.0));
+    local midX = bgX + bgW / 2;
+    DLRectMultiColor(drawList, bgX, bgY, midX, bgY + bgH, transpU32, opaqueU32, opaqueU32, transpU32);
+    DLRectMultiColor(drawList, midX, bgY, bgX + bgW, bgY + bgH, opaqueU32, transpU32, transpU32, opaqueU32);
+    windowbg.Draw(drawList, cx0, cy0, contentW, contentH, {
+        theme = 'Window1', bgScale = 0, bgOpacity = 0,
+        borderScale = cfg.vanaTimeBorderScale or 1.0,
+        borderOpacity = cfg.vanaTimeBorderOpacity or 1.0,
+        bgColor = 0x00000000, borderColor = colorCfg.borderColor or 0xFFFFFFFF,
+        padding = bgPad });
+
+    local todayArgb = colorCfg[data.ELEM_KEYS[weekday]] or 0xFFFFFFFF;
+    local textY = cy0 + math.floor((contentH - fontSize) / 2);
+    local timeColor = cfg.vanaTimeVTElementColor and todayArgb or (tonumber(colorCfg.vtClockColor) or VT_TEXT_COLOR);
+    local tips = cfg.vanaTimeEnableTooltips ~= false;
+
+    local function Tip(x, y, w, h, text)
+        if not tips or not text then return; end
+        if imgui.IsMouseHoveringRect({ x, y }, { x + w, y + h }) then
+            imgui.SetTooltip(text);
+        end
+    end
+
+    local x = cx0;
+    DrawTextWithOutline(drawList, minimalTimeCache.str, x, textY, timeColor, 0xFF000000, fontSize);
+    if cfg.vanaTimeTipVT ~= false then
+        Tip(x, cy0, timeW, contentH, "Vana'diel Time");
+    end
+    x = x + timeW + gap;
+
+    local function DrawDot(wd, atX, alpha)
+        local argb = colorCfg[data.ELEM_KEYS[wd]] or 0xFFFFFFFF;
+        local ring = 0xCC000000;
+        if alpha then
+            argb = WithAlpha(argb, alpha);
+            ring = WithAlpha(0xFF000000, 0.8 * alpha);
+        end
+        local cx = atX + dotR;
+        local cy = cy0 + contentH * 0.5;
+        DLCircleFilled(drawList, cx, cy, dotR + 1, ToU32(ring), 16);
+        DLCircleFilled(drawList, cx, cy, dotR, ToU32(argb), 16);
+        Tip(atX, cy0, dotD, contentH, data.GetWeekdayName(wd));
+    end
+
+    local function DrawPct(md, atX, alpha)
+        local pct = data.CalcMoonPercent(md);
+        local label = string.format('%d%%', pct);
+        local col = MoonPercentArgb(md, colorCfg);
+        local outline = 0xFF000000;
+        if alpha then
+            col = WithAlpha(col, alpha);
+            outline = WithAlpha(outline, alpha);
+        end
+        DrawTextWithOutline(drawList, label, atX, textY, col, outline, fontSize);
+        Tip(atX, cy0, pctW, contentH, MoonTip(md, pct));
+    end
+
+    DrawDot(weekday, x);
+    x = x + dotD + gap;
+    DrawPct(moonDay, x);
+    x = x + pctW + gap;
+
+    local arrY = cy0 + math.floor((contentH - arrowH) / 2);
+    local arrTex = GetTexPtr(arrowRightTex);
+    if arrTex then
+        DLImage(drawList, arrTex, x, arrY, x + arrowW, arrY + arrowH, ToU32(0xC0FFFFFF));
+    else
+        DrawTextWithOutline(drawList, COL_ARROW, x, textY, 0xFFFFFFFF, 0xFF000000, fontSize);
+    end
+    x = x + arrowW + gap;
+
+    local nextWeekday = (weekday + 1) % 8;
+    local nextMoon = (moonDay + 1) % data.VD_MOON_DAYS;
+    DrawDot(nextWeekday, x, 0.55);
+    x = x + dotD + gap;
+    DrawPct(nextMoon, x, 0.55);
+
+    if wxTex then
+        x = x + pctW + weatherGap;
+        local iy = cy0 + math.floor((contentH - wxIcon) / 2);
+        local tint = ToU32(WithAlpha(0xFFFFFFFF, wxAlpha));
+        DLImage(drawList, wxTex, x, iy, x + wxIcon, iy + wxIcon, tint);
+        if wxDouble then
+            local x2 = x + wxIcon + S(2);
+            DLImage(drawList, wxTex, x2, iy, x2 + wxIcon, iy + wxIcon, tint);
+        end
+        if cfg.vanaTimeTipWeather ~= false then
+            Tip(x, cy0, wxW, contentH, data.WEATHER_NAMES[wxId] or 'Weather');
+        end
+    end
+
+    return contentW, contentH;
+end
+
 -- ── DrawWindow ────────────────────────────────────────────────────────────────
 
 function M.DrawWindow(weatherId)
@@ -711,6 +1087,7 @@ function M.DrawWindow(weatherId)
 
     _mainWindowParked = false;
     pendingDayTooltip = nil;
+    popups.ResetAttachedHover();
 
     -- Draw after other modules may have called imtext.SetConfigFromSettings
     -- (Tahoma Bold @ 20px by default). Standalone has its own imtext instance, so we must
@@ -721,9 +1098,18 @@ function M.DrawWindow(weatherId)
 
     local colorCfg = (cfg.colorCustomization or {}).vanaTime or {};
     local scale    = math.max(0.5, math.min(4.0, cfg.vanaTimeScale    or 1.0));
-    local fontSize = math.floor(math.max(8,  math.min(48,  cfg.vanaTimeFontSize or 12)) * scale);
+    local function ClampFont(n, fallback)
+        return math.max(8, math.min(48, math.floor(tonumber(n) or fallback)));
+    end
+    local vtFontBase   = ClampFont(cfg.vanaTimeFontSize, 12);
+    local textFontBase = ClampFont(cfg.vanaTimeTextFontSize or cfg.vanaTimeFontSize, 12);
+    -- VD clock uses its own size. Local time, moon %, and day labels use the other size.
+    local vtFontSize = math.floor(vtFontBase * scale);
+    local fontSize   = math.floor(textFontBase * scale);
     local iconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeIconSize  or 28)) * scale);
     local rounding = 12.0;
+    local minimalScale = math.max(0.5, math.min(4.0, tonumber(cfg.vanaTimeMinimalScale) or 1.0));
+    local showFull = MinimalShowFull(cfg);
 
     -- ── Game data (pure Lua — no FFI) ────────────────────────────────────────
     local rawTime       = data.GetRawTime();
@@ -767,19 +1153,26 @@ function M.DrawWindow(weatherId)
 
     -- ── Column layout geometry ───────────────────────────────────────────────
     local colPad = 8;
+    if not showFull then
+        colPad = math.max(2, math.floor(4 * minimalScale));
+        rounding = math.max(4, 6 * minimalScale);
+    end
 
     -- Hoisted here: also used after imgui.End for timer/weather/TOD popups.
     local showGear   = cfg.vanaTimeShowSettingsBtn ~= false;
     local showTimers = cfg.vanaTimeShowTimers ~= false;
 
+    if vtFontSize ~= lastVtFontSize then
+        lastVtFontSize = vtFontSize;
+        vtCache.measW  = 0;
+    end
     if fontSize ~= lastFontSize then
         lastFontSize   = fontSize;
-        vtCache.measW  = 0;
         ltCache.measW  = 0;
         _moonPctFontSz = -1;
     end
     if vtCache.measW == 0 then
-        vtCache.measW = imtext.Measure(vtCache.str, fontSize);
+        vtCache.measW = imtext.Measure(vtCache.str, vtFontSize);
     end
     if ltStr ~= '' and ltCache.measW == 0 then
         ltCache.measW = imtext.Measure(ltCache.str, fontSize);
@@ -791,6 +1184,7 @@ function M.DrawWindow(weatherId)
 
     -- ── Window open ──────────────────────────────────────────────────────────
     local windowFlags = GetBaseWindowFlags(cfg.lockPositions);
+    local mainHoveredThisFrame = false;
 
     local ok, err = Safe.Run(function(scope)
     scope:PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
@@ -811,8 +1205,16 @@ function M.DrawWindow(weatherId)
 
         local elemArgb    = colorCfg[data.ELEM_KEYS[weekday]] or 0xFFFFFFFF;
         local outlineArgb = GetOutlineColor(weekday);
-        local vtTextColor = cfg.vanaTimeVTElementColor and elemArgb or VT_TEXT_COLOR;
+        local vtTextColor = cfg.vanaTimeVTElementColor and elemArgb or (tonumber(colorCfg.vtClockColor) or VT_TEXT_COLOR);
 
+        local laidOutContentH = 0;
+        if not showFull then
+            local barX, barY = imgui.GetCursorScreenPos();
+            local barW, barH = DrawMinimalBar(imgui.GetWindowDrawList(), barX, barY,
+                cfg, colorCfg, vtHour, vtMin, weekday, moonDay, weatherId, minimalScale, colPad);
+            laidOutContentH = barH;
+            imgui.Dummy({ barW, barH });
+        else
         local dayScale = weekOpen and 0.75 or 1;
         local function S(n) return math.max(1, math.floor(n * dayScale)); end
         local dayIconSize = math.floor(iconSize * dayScale);
@@ -852,7 +1254,12 @@ function M.DrawWindow(weatherId)
                 and (cardW * 3 + SEP_GAP * 4 + sepArrowW * 2)
                 or  cardW);
 
-        local clockH   = fontSize + 4;
+        local ltBelowColumns = (not showPastFuture) and (ltStr ~= '');
+        local clockH = vtFontSize + 4;
+        local ltRowH = fontSize + 4;
+        if ltStr ~= '' and not ltBelowColumns then
+            clockH = math.max(vtFontSize, fontSize) + 4;
+        end
         local iconColH = showMoon and (dayIconSize + S(2) + dayFontSize + S(4)) or (dayIconSize + S(4));
         local singleColH = iconColH;
         if weekOpen then singleColH = singleColH + dayFontSize + S(4); end
@@ -862,24 +1269,33 @@ function M.DrawWindow(weatherId)
         local ltMeasW  = ltStr ~= '' and ltCache.measW or 0;
 
         local totalH = clockH + colH + colPad;
-        local ltBelowColumns = (not showPastFuture) and (ltStr ~= '');
-        if not showPastFuture then
-            local inlineTodW = (not cfg.vanaTimeTodPopup) and (clockH + 3) or 0;
-            local numIcons   = (showTimers and 1 or 0) + (showGear and 1 or 0);
-            local iconZoneW  = numIcons > 0 and (numIcons * clockH + (numIcons - 1) * 2 + 4) or 0;
-            local vtRowNeed  = vtMeasW + inlineTodW + 8 + iconZoneW;
-            local ltRowNeed  = ltStr ~= '' and (ltMeasW + 8) or 0;
-            contentW = math.max(contentW, vtRowNeed, ltRowNeed);
-        end
         if ltBelowColumns then
-            totalH = totalH + clockH + 2;
+            totalH = totalH + ltRowH + 2;
         end
-        if weekOpen then
-            local numIcons = (showTimers and 1 or 0) + (showGear and 1 or 0);
-            local iconZoneW = numIcons > 0 and (numIcons * clockH + (numIcons - 1) * 2 + 8) or 0;
-            local clockNeed = vtMeasW + ltMeasW + iconZoneW + 16;
-            if contentW < clockNeed then contentW = clockNeed; end
+
+        -- Size the clock row from the slots the layout actually uses, so a
+        -- larger VD font widens the window and a smaller one does not leave
+        -- a stuck width behind.
+        local inlineTodW = (not cfg.vanaTimeTodPopup) and (vtFontSize + 3) or 0;
+        local numIcons = (showTimers and 1 or 0) + (showGear and 1 or 0);
+        local iconSpan = numIcons > 0 and (numIcons * ltRowH + (numIcons - 1) * 2) or 0;
+        local vtZone = vtMeasW + inlineTodW + 8;
+        local ltZone = (ltStr ~= '' and (ltMeasW + 8)) or 0;
+        local clockNeed = vtZone;
+        local sideBySide = (ltStr ~= '') and (not ltBelowColumns);
+        if weekOpen or (showTimers and sideBySide) then
+            local slot = math.max(vtZone, ltZone, iconSpan + 8);
+            clockNeed = slot * 3;
+        elseif sideBySide then
+            clockNeed = math.max(vtZone, ltZone) * 2;
+            if showGear then clockNeed = clockNeed + ltRowH + 4; end
+        elseif iconSpan > 0 then
+            clockNeed = math.max(math.ceil(vtZone * 1.5), (iconSpan + 8) * 3);
         end
+        if ltBelowColumns and ltZone > clockNeed then
+            clockNeed = ltZone;
+        end
+        if contentW < clockNeed then contentW = clockNeed; end
 
         local cx0, cy0 = imgui.GetCursorScreenPos();
         local drawList = imgui.GetWindowDrawList();
@@ -921,10 +1337,13 @@ function M.DrawWindow(weatherId)
             DLRect(drawList, bgX,bgY, bgX+bgW,bgY+bgH, ToU32(borderArgb), rounding, nil, 1.0);
         end
 
+        laidOutContentH = totalH;
         imgui.Dummy({contentW, totalH});
 
         -- ── Clock row ────────────────────────────────────────────────────────
         local clockY = cy0;
+        local vtTextY = clockY + math.floor((clockH - 4 - vtFontSize) / 2);
+        local ltTextY = clockY + math.floor((clockH - 4 - fontSize) / 2);
 
         do
             local gY   = clockY - 2;
@@ -938,7 +1357,7 @@ function M.DrawWindow(weatherId)
             DLRectMultiColor(drawList, midX,gY, gX2,gY+gH, glow,transp,transp,glow);
         end
 
-        local iconSzClock = clockH;
+        local iconSzClock = ltRowH;
 
         -- TOD icon (inline in clock row — only when popup is disabled)
         local todTexRaw =
@@ -950,11 +1369,12 @@ function M.DrawWindow(weatherId)
         local function DrawTodIcon(vtX)
             if not todIconTex then return end;
             if cfg.vanaTimeTodPopup then return end;
+            local todSz = vtFontSize;
             local tx = vtX + vtMeasW + 3;
-            local ty = clockY + math.floor((clockH - clockH) / 2);
-            DLImage(drawList, todIconTex, tx,ty, tx+clockH,ty+clockH, ToU32(0xEEFFFFFF));
+            local ty = vtTextY;
+            DLImage(drawList, todIconTex, tx,ty, tx+todSz,ty+todSz, ToU32(0xEEFFFFFF));
             if cfg.vanaTimeEnableTooltips ~= false and cfg.vanaTimeTipTod ~= false
-                and imgui.IsMouseHoveringRect({tx, ty}, {tx + clockH, ty + clockH}) then
+                and imgui.IsMouseHoveringRect({tx, ty}, {tx + todSz, ty + todSz}) then
                 imgui.SetTooltip('Time of Day: ' .. (data.GetTodName(vtHour) or ''));
             end
         end
@@ -1021,7 +1441,7 @@ function M.DrawWindow(weatherId)
                 local vtX  = cx0 + math.floor((twoThird - vtMeasW) / 2);
                 local icX  = cx0 + twoThird + math.floor(((contentW - twoThird) - iconSzClock) / 2);
                 local icY  = clockY + math.floor((clockH - iconSzClock) / 2);
-                DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+                DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
                 DrawTodIcon(vtX);
                 PlaceClockIcon(icX, icY, iconSzClock);
                 DrawClockTooltips(vtX, nil);
@@ -1031,9 +1451,9 @@ function M.DrawWindow(weatherId)
                 local icX  = cx0 + third + math.floor((third - iconSzClock) / 2);
                 local icY  = clockY + math.floor((clockH - iconSzClock) / 2);
                 local ltX  = cx0 + third * 2 + math.floor((third - ltMeasW) / 2);
-                DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+                DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
                 DrawTodIcon(vtX);
-                DrawTextWithOutline(drawList, ltStr, ltX, clockY, colorCfg.textColor or 0xFFFFFFFF, outlineArgb, fontSize);
+                DrawTextWithOutline(drawList, ltStr, ltX, ltTextY, colorCfg.textColor or 0xFFFFFFFF, outlineArgb, fontSize);
                 PlaceClockIcon(icX, icY, iconSzClock);
                 DrawClockTooltips(vtX, ltX);
             else
@@ -1041,7 +1461,7 @@ function M.DrawWindow(weatherId)
                 local vtX  = cx0 + math.floor((twoThird - vtMeasW) / 2);
                 local icX  = cx0 + twoThird + math.floor(((contentW - twoThird) - iconSzClock) / 2);
                 local icY  = clockY + math.floor((clockH - iconSzClock) / 2);
-                DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+                DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
                 DrawTodIcon(vtX);
                 PlaceClockIcon(icX, icY, iconSzClock);
                 DrawClockTooltips(vtX, nil);
@@ -1049,7 +1469,7 @@ function M.DrawWindow(weatherId)
         elseif ltBelowColumns then
             local twoThird = showGear and math.floor(contentW * 2 / 3) or contentW;
             local vtX = cx0 + math.floor((twoThird - vtMeasW) / 2);
-            DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+            DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
             DrawTodIcon(vtX);
             DrawClockTooltips(vtX, nil);
             if showGear then
@@ -1061,9 +1481,9 @@ function M.DrawWindow(weatherId)
             local halfW = contentW / 2;
             local vtX   = cx0 + math.floor((halfW - vtMeasW) / 2);
             local ltX   = cx0 + halfW + math.floor((halfW - ltMeasW) / 2);
-            DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+            DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
             DrawTodIcon(vtX);
-            DrawTextWithOutline(drawList, ltStr, ltX, clockY, colorCfg.textColor or 0xFFFFFFFF, outlineArgb, fontSize);
+            DrawTextWithOutline(drawList, ltStr, ltX, ltTextY, colorCfg.textColor or 0xFFFFFFFF, outlineArgb, fontSize);
             DrawClockTooltips(vtX, ltX);
             if showGear then
                 DrawGearIcon(cx0 + contentW - iconSzClock, clockY + math.floor((clockH - iconSzClock) / 2), iconSzClock);
@@ -1071,7 +1491,7 @@ function M.DrawWindow(weatherId)
         else
             local twoThird = showGear and math.floor(contentW * 2 / 3) or contentW;
             local vtX = cx0 + math.floor((twoThird - vtMeasW) / 2);
-            DrawTextWithOutline(drawList, vtStr, vtX, clockY, vtTextColor, outlineArgb, fontSize);
+            DrawTextWithOutline(drawList, vtStr, vtX, vtTextY, vtTextColor, outlineArgb, vtFontSize);
             DrawTodIcon(vtX);
             DrawClockTooltips(vtX, nil);
             if showGear then
@@ -1158,11 +1578,37 @@ function M.DrawWindow(weatherId)
             local ltX = cx0 + math.floor((contentW - ltMeasW) / 2);
             DrawTextWithOutline(drawList, ltStr, ltX, ltY, colorCfg.textColor or 0xFFFFFFFF, outlineArgb, fontSize);
             if cfg.vanaTimeEnableTooltips ~= false and cfg.vanaTimeTipLT ~= false then
-                if imgui.IsMouseHoveringRect({ltX,ltY},{ltX+ltMeasW,ltY+clockH}) then
+                if imgui.IsMouseHoveringRect({ltX,ltY},{ltX+ltMeasW,ltY+ltRowH}) then
                     imgui.SetTooltip('Local Time');
                 end
             end
         end
+        end -- showFull
+
+        -- Upward expand keeps the bar's bottom edge fixed, so the full window
+        -- grows above it. A drag while the height is steady updates that edge.
+        local expandUp = cfg.vanaTimeMinimalist == true
+            and (cfg.vanaTimeMinimalExpandDir or 'down') == 'up';
+        if expandUp and laidOutContentH > 0 then
+            local x, y = imgui.GetWindowPos();
+            local winH = laidOutContentH + colPad * 2;
+            if expandAnchorBottom ~= nil and lastExpandContentH ~= nil
+                and lastExpandContentH ~= laidOutContentH then
+                local newY = expandAnchorBottom - winH;
+                imgui.SetWindowPos({ x, newY }, ImGuiCond_Always);
+                y = newY;
+                mainWinPos.x = x;
+                mainWinPos.y = y;
+                mainWinSize.h = winH;
+            end
+            expandAnchorBottom = y + winH;
+            lastExpandContentH = laidOutContentH;
+        else
+            expandAnchorBottom = nil;
+            lastExpandContentH = nil;
+        end
+
+        mainHoveredThisFrame = imgui.IsWindowHovered(MINIMAL_HOVER_FLAGS);
     end -- visible
     end);
     if not ok then
@@ -1171,6 +1617,7 @@ function M.DrawWindow(weatherId)
 
     DrawDayColumnTooltipWindow();
 
+    if showFull then
     -- ── Popup stacking offsets ────────────────────────────────────────────────
     local todEnabled    = cfg.vanaTimeTodPopup == true;
 
@@ -1224,11 +1671,18 @@ function M.DrawWindow(weatherId)
         todIconSize = iconSize;
     end
 
+    -- Nil follows the main window scale. A stored value sizes only the zone weather tab.
+    local weatherScale = scale;
+    local weatherScaleSetting = tonumber(cfg.vanaTimeWeatherScale);
+    if weatherScaleSetting then
+        weatherScale = math.max(0.5, math.min(4.0, weatherScaleSetting));
+    end
+
     local weatherBaseSize;
     if cfg.vanaTimeWeatherCustomScale then
-        weatherBaseSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherIconSize or 28)) * scale);
+        weatherBaseSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherIconSize or 28)) * weatherScale);
     else
-        weatherBaseSize = iconSize;
+        weatherBaseSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeIconSize or 28)) * weatherScale);
     end
     local effectiveWeatherId = weatherTestId or weatherId;
     local useElementalSize = cfg.vanaTimeWeatherAdjustElemental == true
@@ -1242,9 +1696,9 @@ function M.DrawWindow(weatherId)
             weatherIconSize = weatherBaseSize;
         elseif isElemental or previewElem then
             if cfg.vanaTimeWeatherCustomScale then
-                weatherIconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherElementalIconSize or 42)) * scale);
+                weatherIconSize = math.floor(math.max(16, math.min(128, cfg.vanaTimeWeatherElementalIconSize or 42)) * weatherScale);
             else
-                weatherIconSize = math.min(math.floor(weatherBaseSize * 1.5), math.floor(128 * scale));
+                weatherIconSize = math.min(math.floor(weatherBaseSize * 1.5), math.floor(128 * weatherScale));
             end
         end
     end
@@ -1261,6 +1715,10 @@ function M.DrawWindow(weatherId)
         local timersFontSize = math.floor(math.max(8, math.min(48, cfg.vanaTimeTimersFontSize or 12)) * scale);
         popups.DrawTimersPopup(timersFontSize, colorCfg, rounding);
     end
+    end -- showFull
+
+    local hovered = mainHoveredThisFrame or popups.AttachedHovered();
+    UpdateMinimalMode(cfg, hovered);
 end
 
 return M;

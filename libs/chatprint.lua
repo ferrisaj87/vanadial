@@ -13,7 +13,11 @@ local function SanitizeChat(text)
 end
 
 function M.Print(msg)
-    print(chat.header(HEADER):append(chat.message(SanitizeChat(msg))));
+    -- FFXI treats ">" as the start of an auto-translate phrase. A route key
+    -- such as "Selbina>Mhaura>>" then shows up as a blank chat line.
+    local text = SanitizeChat(msg):gsub('>', '/');
+    if text == '' then return; end
+    print(chat.header(HEADER):append(chat.message(text)));
 end
 
 return M;

@@ -38,14 +38,27 @@ end
 --   todTextures       {day, night, deadOfNight}
 --   GetTexPtr         function(tex) → ptr
 local _ctx = nil;
+local attachedHovered = false;
 
 function M.Initialize(ctx)
     _ctx = ctx;
 end
 
+function M.ResetAttachedHover()
+    attachedHovered = false;
+end
+
+function M.AttachedHovered()
+    return attachedHovered;
+end
+
 -- ── Constants ─────────────────────────────────────────────────────────────────
 
 local WEATHER_POPUP_GAP = 4;  -- px gap between main window and popup
+local HOVER_FLAGS = bit.bor(
+    rawget(_G, 'ImGuiHoveredFlags_AllowWhenBlockedByPopup') or 32,
+    rawget(_G, 'ImGuiHoveredFlags_AllowWhenBlockedByActiveItem') or 128
+);
 
 -- ── Window flags ──────────────────────────────────────────────────────────────
 
@@ -859,8 +872,9 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         if wh and wh > 1 then measuredTimersH = wh; end
 
         -- Flag 32 = AllowWhenBlockedByPopup (ImGuiHoveredFlags_AllowWhenBlockedByPopup)
-        local timersHovered = imgui.IsWindowHovered(32);
+        local timersHovered = imgui.IsWindowHovered(HOVER_FLAGS);
         if timersHovered then
+            attachedHovered = true;
             timersLastActivity = NowSeconds();
         end
 
@@ -1041,7 +1055,8 @@ function M.DrawTodPopup(vtHour, vtMinuteOfDay, iconSize, colorCfg, rounding, ali
             imgui.Dummy({tw, th});
         end
 
-        if imgui.IsWindowHovered() then
+        if imgui.IsWindowHovered(HOVER_FLAGS) then
+            attachedHovered = true;
             if cfg.vanaTimeEnableTooltips ~= false and cfg.vanaTimeTipTod ~= false then
                 imgui.SetTooltip('Time of Day: ' .. (data.GetTodName(vtHour) or ''));
             end
@@ -1160,7 +1175,8 @@ function M.DrawWeatherPopup(weatherId, fontSize, iconSize, colorCfg, rounding, o
 
         imgui.Dummy({iconSize + doubleW, iconSize});
 
-        if imgui.IsWindowHovered() then
+        if imgui.IsWindowHovered(HOVER_FLAGS) then
+            attachedHovered = true;
             if cfg.vanaTimeEnableTooltips ~= false and cfg.vanaTimeTipWeather ~= false then
                 imgui.SetTooltip(data.WEATHER_NAMES[weatherId] or 'Unknown');
             end

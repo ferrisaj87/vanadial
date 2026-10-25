@@ -24,7 +24,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.5.4';
+addon.version = '1.6.0';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -97,6 +97,11 @@ local defaults = T{
     vanaTimeTodIconSize          = 28,
     vanaTimeTodShowTimer         = true,
     vanaTimeScale                = 1.0,
+    vanaTimeMinimalist           = false,
+    vanaTimeMinimalScale         = 1.0,
+    vanaTimeMinimalExpand        = 'hover',
+    vanaTimeMinimalExpandDir     = 'down',
+    vanaTimeMinimalDelay         = 5,
     vanaTimeFontSize             = 12,
     vanaTimeFontBold             = true,  -- match XIUI default fontWeight = 'Bold'
     vanaTimeIconSize             = 28,
@@ -140,10 +145,16 @@ local defaults = T{
     windowPositions  = T{},
     popoutsOpen      = T{},
     popoutScales     = T{},
+    pocketKeys       = T{},
+    pocketOpen       = false,
+    pocketWidth      = 0,
+    pocketWatches    = T{ T{ accum = 0, running = false } },
+    pocketCountdowns = T{ T{ hours = 0, minutes = 5, running = false, endsAt = 0, remain = 0, primed = true } },
     colorCustomization = T{
         vanaTime = T{
             bgColor          = 0xFF000000,
             borderColor      = 0xFFFFFFFF,
+            vtClockColor     = 0xFFC3AE79,  -- XIUI gold; VD clock text
             textColor        = 0xFFFFFFFF,
             moonFullColor    = 0xFF88CCFF,  -- moonlit blue (matches in-game full moon pulse)
             moonNewColor     = 0xFFFF4444,
@@ -299,12 +310,16 @@ local function OnCharacterSettingsReady(s)
     _allowPositionSave = false;
 
     local key = GetSettingsCharKey();
+    local sameCharacter = nil;
+    if key and _activeCharKey then
+        sameCharacter = key == _activeCharKey;
+    end
     if key then _activeCharKey = key; end
 
     if switching then
         _positionReady = false;
     end
-    if onSettingsReady then onSettingsReady(); end
+    if onSettingsReady then onSettingsReady(sameCharacter); end
 end
 
 local function ReloadCharacterSettingsIfNeeded()
@@ -329,10 +344,50 @@ end
 -- ── Config window state ───────────────────────────────────────────────────────
 local _configOpen = false;
 
+-- 'general' opens the normal settings tab. 'popout' is only the pocket gear.
+local _configLanding = nil;
+local _popoutScaleFocus = nil;
+
+local function OpenConfigNormal()
+    _popoutScaleFocus = nil;
+    _configLanding = 'general';
+    _configOpen = true;
+end
+
 -- display.lua calls VanaDial_ToggleConfig when the gear icon is clicked.
 VanaDial_ToggleConfig = function()
-    _configOpen = not _configOpen;
+    if _configOpen then
+        _configOpen = false;
+        _configLanding = nil;
+        _popoutScaleFocus = nil;
+    else
+        OpenConfigNormal();
+    end
 end;
+
+function VanaDial_OpenPopoutScale(key)
+    if type(key) ~= 'string' or key == '' then return; end
+    _configOpen = true;
+    _configLanding = 'popout';
+    _popoutScaleFocus = key;
+end
+
+function VanaDial_ConfigLanding()
+    return _configLanding;
+end
+
+function VanaDial_PopoutScaleFocus()
+    return _popoutScaleFocus;
+end
+
+function VanaDial_ClearConfigLanding()
+    _configLanding = nil;
+    _popoutScaleFocus = nil;
+end
+
+function VanaDial_IsConfigOpen()
+    return _configOpen;
+end
 
 -- ── Window helper globals (mirror of XIUI handlers/helpers.lua) ───────────────
 -- display.lua calls these as bare globals; we provide standalone equivalents.
@@ -406,8 +461,8 @@ local popups          = require('popups');
 local config          = require('config');
 local sunbreeze       = require('sunbreeze');
 local popouts         = require('popouts');
-onSettingsReady = function()
-    popouts.RestoreSaved();
+onSettingsReady = function(sameCharacter)
+    popouts.RestoreSaved(sameCharacter);
 end
 popouts.RestoreSaved();
 local TextureManager  = require('libs.texturemanager');
@@ -523,6 +578,12 @@ local function ResetWeatherState()
 end
 
 local function BeginZoning()
+    -- Write the pocket list and window position before a zone reload can
+    -- swap in a settings table that does not have them yet.
+    if _settingsDirty then
+        SaveVanaDialSettings();
+        _settingsDirty = false;
+    end
     _allowPositionSave = false;
     _positionReady = false;
     _presentInWorld = false;
@@ -918,7 +979,7 @@ ashita.events.register('command', 'vd_command', function(e)
         end
 
     elseif sub == 'config' then
-        _configOpen = not _configOpen;
+        VanaDial_ToggleConfig();
 
     elseif sub == 'ships' or sub == 'vtships' then
         hidden = false;
