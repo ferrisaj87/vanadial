@@ -25,9 +25,10 @@ local WIN_FLAGS = bit.bor(
     ImGuiWindowFlags_NoSavedSettings
 );
 
--- Resizable width. Height is set from the rows, so dragging changes the width.
+-- Sized to its rows. No resize grip: that corner sat on the teal timer's + button.
 local POCKET_FLAGS = bit.bor(
     ImGuiWindowFlags_NoTitleBar,
+    ImGuiWindowFlags_NoResize,
     ImGuiWindowFlags_NoScrollbar,
     ImGuiWindowFlags_NoCollapse,
     ImGuiWindowFlags_NoFocusOnAppearing,
