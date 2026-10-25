@@ -52,6 +52,7 @@ Per-character settings are stored under `Game/config/addons/vanadial/<character>
 | `/vd rse` | Toggle RSE timers |
 | `/vd lunar` | Toggle lunar phase timers |
 | `/vd guilds` | Toggle guild shop timers |
+| `/vd pocket` | Open or close the pocket window |
 | `/vd sunbreezerace` | Toggle the independent standalone Sunbreeze Racing event window |
 | `/vd popout <group>` | Pop that timer group into its own window (`ships`, `boats`, `boatsall`, `manaclipper`, `barge`, `rse`, `lunar`, `guilds`). Run again to close |
 | `/vd popout close` | Close every timer pop out |

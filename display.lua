@@ -538,7 +538,18 @@ local function DrawDayColumnTooltipWindow()
     local dayName   = data.GetWeekdayName(colWeekday);
 
     local direction = (gConfig and gConfig.vanaTimeTooltipDirection) or 'above';
-    local anchorX   = mainWinPos.x + mainWinSize.w * 0.5;
+    local align     = (gConfig and gConfig.vanaTimeTooltipAlign) or 'center';
+    local anchorX, pivotX;
+    if align == 'left' then
+        anchorX = mainWinPos.x;
+        pivotX  = 0.0;
+    elseif align == 'right' then
+        anchorX = mainWinPos.x + mainWinSize.w;
+        pivotX  = 1.0;
+    else
+        anchorX = mainWinPos.x + mainWinSize.w * 0.5;
+        pivotX  = 0.5;
+    end
     local anchorY   = (direction == 'below')
         and (mainWinPos.y + mainWinSize.h + 4)
         or  (mainWinPos.y - 4);
@@ -546,7 +557,7 @@ local function DrawDayColumnTooltipWindow()
 
     local ok, err = Safe.Run(function(scope)
     imgui.SetNextWindowBgAlpha(0.92);
-    imgui.SetNextWindowPos({anchorX, anchorY}, ImGuiCond_Always, {0.5, pivotY});
+    imgui.SetNextWindowPos({anchorX, anchorY}, ImGuiCond_Always, {pivotX, pivotY});
     scope:PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0);
     scope:PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 8});
 

@@ -141,6 +141,8 @@ local ALIGN_LABELS = T{'Left', 'Right'};
 local ALIGN_VALUES = T{'left', 'right'};
 local DIR_LABELS   = T{'Above', 'Below'};
 local DIR_VALUES   = T{'above', 'below'};
+local TIP_ALIGN_LABELS = T{'Center', 'Left', 'Right'};
+local TIP_ALIGN_VALUES = T{'center', 'left', 'right'};
 
 -- Chat commands (shown on the Commands tab; keep in sync with vanadial.lua).
 local VD_COMMANDS = {
@@ -155,6 +157,7 @@ local VD_COMMANDS = {
     { '/vd rse',    'Open the timers popup with RSE expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd lunar',  'Open the timers popup with Lunar Phases expanded. Other sections are collapsed. Run again to close the popup.' },
     { '/vd guilds', 'Open the timers popup with Guild Shops expanded. Other sections are collapsed. Run again to close the popup.' },
+    { '/vd pocket', 'Open or close the pocket window.' },
     { '/vd sunbreezerace', 'Toggle the independent Sunbreeze Racing event window.' },
     { '/vd popout <group>', 'Open that timer group in its own window: ships, boats, boatsall, manaclipper, barge, rse, lunar, or guilds. Run it again to close. /vd popout close closes every pop out, including the pocket. Each timer row has a pocket button that gathers routes into one window, and a pin that detaches just that route.' },
     { '/vd reset',  "Reset the Vana'Dial, Sunbreeze Racing, and timer pop out positions." },
@@ -344,12 +347,12 @@ function M.Draw(openFlag, setOpen)
             imgui.Spacing();
 
             -- Background
-            if imgui.CollapsingHeader('Background##vt', 0) then
+            if imgui.CollapsingHeader('Background##vt', ImGuiTreeNodeFlags_DefaultOpen) then
                 imgui.Indent(12);
-                SF('Background Opacity##vt', 'vanaTimeBackgroundOpacity', 0.0, 1.0, '%.2f', 0.85);
-                Tip('Multiplies Background Tint transparency on the main bar and TOD/Weather popups. Double right-click to reset.');
+                SF('Main Opacity##vt', 'vanaTimeBackgroundOpacity', 0.0, 1.0, '%.2f', 0.85);
+                Tip("Transparency of the clock and the time-of-day and weather tabs. Double right-click to reset.");
                 SF('Border Opacity##vt', 'vanaTimeBorderOpacity', 0.0, 1.0, '%.2f', 1.0);
-                Tip('Opacity of window borders. Double right-click to reset.');
+                Tip('Opacity of the main window border. Double right-click to reset.');
                 imgui.Unindent(12);
             end
 
@@ -484,26 +487,28 @@ function M.Draw(openFlag, setOpen)
             imgui.Spacing();
 
             -- Timers
-            if imgui.CollapsingHeader('Timers Panel##vt', ImGuiTreeNodeFlags_DefaultOpen) then
+            if imgui.CollapsingHeader('Timers Menu##vt', ImGuiTreeNodeFlags_DefaultOpen) then
                 imgui.Indent(12);
                 CB('Enable Timers', 'vanaTimeShowTimers');
-                Tip('Show a clock icon that opens the transport and RSE timer panel.');
+                Tip('Show a clock icon that opens the timers menu.');
                 if gConfig.vanaTimeShowTimers ~= false then
                     imgui.Indent(16);
                     imgui.Text('Side:');
                     imgui.SameLine(0, 8);
                     Combo('##vanaTimeTimerSide', 'vanaTimeTimerSide', DIR_LABELS, DIR_VALUES, 'above', COMBO_WIDTH_DIR);
+                    SF('Opacity##vtTimers', 'vanaTimePopupOpacity', 0.0, 1.0, '%.2f', 0.85);
+                    Tip('Transparency of the timers menu. Double right-click to reset.');
                     SI('Timers Font Size##vt', 'vanaTimeTimersFontSize', 8, 48, 12);
                     Tip('Font size inside the timers panel. Double right-click to reset.');
                     imgui.Spacing();
                     CB('Auto-Close on Outside Click', 'vanaTimeTimersAutoCloseClick');
-                    Tip('Automatically close the Timers panel when you click anywhere outside of it.');
+                    Tip('Automatically close the timers menu when you click anywhere outside of it.');
                     CB('Auto-Close on Inactivity', 'vanaTimeTimersAutoCloseIdle');
-                    Tip('Automatically close the Timers panel after a period of no interaction.');
+                    Tip('Automatically close the timers menu after a period of no interaction.');
                     if gConfig.vanaTimeTimersAutoCloseIdle then
                         imgui.Indent(16);
                         SI('Idle Seconds##vt_timers', 'vanaTimeTimersAutoCloseIdleSec', 1, 60, 5);
-                        Tip('Seconds of inactivity before the Timers panel closes. Double right-click to reset.');
+                        Tip('Seconds of inactivity before the timers menu closes. Double right-click to reset.');
                         imgui.Unindent(16);
                     end
                     imgui.Unindent(16);
@@ -513,19 +518,63 @@ function M.Draw(openFlag, setOpen)
 
             imgui.Spacing();
 
-            if popoutFocus then
+            if popoutFocus == 'pocket' then
                 imgui.SetNextItemOpen(true, ImGuiCond_Always);
             end
-            if imgui.CollapsingHeader('Pop Outs##vt') then
+            if imgui.CollapsingHeader('Pocket##vt', ImGuiTreeNodeFlags_DefaultOpen) then
+                imgui.Indent(12);
+                SF('Opacity##vtPocket', 'vanaTimePocketOpacity', 0.0, 1.0, '%.2f', 0.92);
+                Tip('Transparency of the pocket window. Double right-click to reset.');
+                if not gConfig.popoutScales then gConfig.popoutScales = T{}; end
+                local pocketScale = T{ tonumber(gConfig.popoutScales['pocket']) or tonumber(gConfig.vanaTimeScale) or 1.0 };
+                if popoutFocus == 'pocket' then
+                    imgui.SetScrollHereY(0.25);
+                end
+                imgui.SetNextItemWidth(180);
+                if imgui.SliderFloat('Scale##vtPocket', pocketScale, 0.5, 4.0, '%.2f') then
+                    gConfig.popoutScales['pocket'] = pocketScale[1];
+                    SaveVanaDialSettings();
+                end
+                if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
+                    gConfig.popoutScales['pocket'] = nil;
+                    SaveVanaDialSettings();
+                end
+                Tip('Scale for the pocket window. Double right-click to follow the main window scale.');
+                imgui.Text('Stopwatch:');
+                imgui.SameLine(0, 8);
+                Combo('##pocketToolsPlace', 'pocketToolsPlace',
+                    T{'Bottom', 'Top'}, T{'bottom', 'top'}, 'bottom', COMBO_WIDTH_DIR);
+                Tip('Bottom keeps the stopwatch and countdown under the pinned timers. New rows grow downward. Top puts them under the title, and new rows grow upward so the bottom of the pocket stays put.');
+                imgui.Text('Timers:');
+                imgui.SameLine(0, 8);
+                Combo('##pocketTimerExpand', 'pocketTimerExpand',
+                    T{'Expand Down', 'Expand Up'}, T{'down', 'up'}, 'down', 120);
+                Tip('When a timer is pinned from the timers menu, Expand Down grows the pocket downward. Expand Up keeps the bottom edge in place and grows upward.');
+                imgui.Unindent(12);
+            end
+
+            imgui.Spacing();
+
+            if popoutFocus and popoutFocus ~= 'pocket' then
+                imgui.SetNextItemOpen(true, ImGuiCond_Always);
+            end
+            if imgui.CollapsingHeader('Pop Out Scaling##vt') then
                 imgui.Indent(12);
                 local keys = popouts.OpenKeys();
-                if not keys[1] then
-                    imgui.TextDisabled('Open a pop out to set its scale.');
+                local shown = {};
+                for i = 1, #keys do
+                    if keys[i] ~= 'pocket' then
+                        shown[#shown + 1] = keys[i];
+                    end
+                end
+                if not shown[1] then
+                    imgui.TextDisabled('Open a pop out to set its scale and opacity.');
                 else
                     if not gConfig.popoutScales then gConfig.popoutScales = T{}; end
+                    if not gConfig.popoutOpacities then gConfig.popoutOpacities = T{}; end
                     local fallback = tonumber(gConfig.vanaTimeScale) or 1.0;
-                    for i = 1, #keys do
-                        local key = keys[i];
+                    for i = 1, #shown do
+                        local key = shown[i];
                         local stored = tonumber(gConfig.popoutScales[key]);
                         local v = T{ stored or fallback };
                         imgui.Text(popouts.Label(key));
@@ -533,7 +582,7 @@ function M.Draw(openFlag, setOpen)
                             imgui.SetScrollHereY(0.25);
                         end
                         imgui.SetNextItemWidth(180);
-                        if imgui.SliderFloat('##vdPopScale_' .. key, v, 0.5, 4.0, '%.2f') then
+                        if imgui.SliderFloat('Scale##vdPopScale_' .. key, v, 0.5, 4.0, '%.2f') then
                             gConfig.popoutScales[key] = v[1];
                             SaveVanaDialSettings();
                         end
@@ -542,7 +591,19 @@ function M.Draw(openFlag, setOpen)
                             SaveVanaDialSettings();
                         end
                         Tip('Scale for this pop out only. Double right-click to follow the main window scale.');
-                        if i < #keys then imgui.Spacing(); end
+                        local storedOp = tonumber(gConfig.popoutOpacities[key]);
+                        local ov = T{ storedOp or 0.92 };
+                        imgui.SetNextItemWidth(180);
+                        if imgui.SliderFloat('Opacity##vdPopOp_' .. key, ov, 0.0, 1.0, '%.2f') then
+                            gConfig.popoutOpacities[key] = ov[1];
+                            SaveVanaDialSettings();
+                        end
+                        if imgui.IsItemHovered() and imgui.IsMouseDoubleClicked(1) then
+                            gConfig.popoutOpacities[key] = nil;
+                            SaveVanaDialSettings();
+                        end
+                        Tip('Transparency of this pop out. Double right-click to reset.');
+                        if i < #shown then imgui.Spacing(); end
                     end
                 end
                 imgui.Unindent(12);
@@ -581,6 +642,11 @@ function M.Draw(openFlag, setOpen)
                     Combo('##vanaTimeTooltipDirection', 'vanaTimeTooltipDirection',
                         DIR_LABELS, DIR_VALUES, 'above', COMBO_WIDTH_DIR);
                     Tip("Whether the day column tooltip appears above or below the Vana'Dial window.");
+                    imgui.Text('Alignment:');
+                    imgui.SameLine(0, 8);
+                    Combo('##vanaTimeTooltipAlign', 'vanaTimeTooltipAlign',
+                        TIP_ALIGN_LABELS, TIP_ALIGN_VALUES, 'center', COMBO_WIDTH_DIR);
+                    Tip("Center places the tooltip on the middle of the window. Left keeps it from growing past the left edge. Right keeps it from growing past the right edge.");
                     imgui.Unindent(16);
                 end
                 imgui.Unindent(12);

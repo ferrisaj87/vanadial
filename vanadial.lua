@@ -15,6 +15,7 @@
 *   /vd rse               - Open/close RSE timer section
 *   /vd lunar             - Open/close lunar timer section
 *   /vd guilds            - Open/close guild shop timers
+*   /vd pocket            - Open/close the pocket window
 *   /vd sunbreezerace     - Toggle the Sunbreeze Racing event window
 *   /vd popout <group>    - Pop a timer group into its own window
 *   /vd reset             - Reset Vana'Dial, Sunbreeze, and pop out positions
@@ -24,7 +25,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.6.1';
+addon.version = '1.7.0';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -108,8 +109,11 @@ local defaults = T{
     vanaTimeBgScale              = 1.0,
     vanaTimeBorderScale          = 1.0,
     vanaTimeBackgroundOpacity    = 0.85,
+    vanaTimePopupOpacity         = 0.85,
+    vanaTimePocketOpacity        = 0.92,
     vanaTimeBorderOpacity        = 1.0,
     vanaTimeTooltipDirection     = 'above',
+    vanaTimeTooltipAlign         = 'center',
     vanaTimeShowTooltip          = true,
     vanaTimeTooltipFenrir        = true,
     vanaTimeTooltipSeleneBow     = true,
@@ -145,8 +149,11 @@ local defaults = T{
     windowPositions  = T{},
     popoutsOpen      = T{},
     popoutScales     = T{},
+    popoutOpacities  = T{},
     pocketKeys       = T{},
     pocketOpen       = false,
+    pocketToolsPlace = 'bottom',
+    pocketTimerExpand = 'down',
     pocketWidth      = 0,
     pocketWatches    = T{ T{ accum = 0, running = false } },
     pocketCountdowns = T{ T{ hours = 0, minutes = 5, running = false, endsAt = 0, remain = 0, primed = true } },
@@ -1013,6 +1020,10 @@ ashita.events.register('command', 'vd_command', function(e)
         hidden = false;
         popups.OpenTimersSection('vdguilds');
 
+    elseif sub == 'pocket' then
+        local opened = popouts.TogglePocket();
+        VanaDialPrint(opened and 'Pocket window shown.' or 'Pocket window hidden.');
+
     elseif sub == 'popout' then
         local which = args[3] and args[3]:lower() or '';
         local msg = popouts.ToggleCommand(which);
@@ -1060,6 +1071,7 @@ ashita.events.register('command', 'vd_command', function(e)
         VanaDialPrint('  /vd rse           - Toggle RSE timers (vtrse ok)');
         VanaDialPrint('  /vd lunar         - Toggle lunar timers (vtlunar ok)');
         VanaDialPrint('  /vd guilds        - Toggle guild shop timers');
+        VanaDialPrint('  /vd pocket        - Open or close the pocket window');
         VanaDialPrint('  /vd sunbreezerace - Toggle Sunbreeze Racing window');
         VanaDialPrint('  /vd popout <group> - Pop out ships, boats, boatsall, manaclipper, barge, rse, lunar, guilds');
         VanaDialPrint('  /vd popout close  - Close every timer pop out');

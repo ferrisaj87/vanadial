@@ -103,11 +103,31 @@ local function WithAlpha(argb, alpha)
     return bit.bor(bit.lshift(a, 24), bit.band(argb, 0x00FFFFFF));
 end
 
-local function ResolveBackgroundOpacity(cfg, bgArgb)
+local function Clamp01(v, fallback)
+    v = tonumber(v);
+    if v == nil then v = fallback; end
+    if v < 0 then return 0; end
+    if v > 1 then return 1; end
+    return v;
+end
+
+-- Popup windows keep their designed alpha at the default slider value.
+local function FadeAlpha(baseAlpha, opacity, designed)
+    if not designed or designed <= 0 then return 0; end
+    local a = baseAlpha * opacity / designed;
+    if a < 0 then return 0; end
+    if a > 1 then return 1; end
+    return a;
+end
+
+local function TimersMenuOpacity(cfg)
+    return Clamp01(cfg and cfg.vanaTimePopupOpacity, 0.85);
+end
+
+local function ResolveBackgroundOpacity(cfg, bgArgb, sliderKey, fallback)
     local argb = tonumber(bgArgb) or 0xFF000000;
     local fromColor = bit.band(bit.rshift(argb, 24), 0xFF) / 255.0;
-    local fromSlider = tonumber(cfg.vanaTimeBackgroundOpacity);
-    if fromSlider == nil then fromSlider = 0.85; end
+    local fromSlider = Clamp01(cfg and cfg[sliderKey or 'vanaTimeBackgroundOpacity'], fallback or 0.85);
     return math.max(0, math.min(1, fromColor * fromSlider));
 end
 
@@ -407,8 +427,8 @@ local function DrawSectionDivider()
     if not ok then error(err); end
 end
 
--- Collapse-all button — closure-free; positioned closest to the main widget.
-local function DrawCollapseButton()
+-- Collapse stays beside the clock. Pocket sits on the right end of that same line.
+local function DrawTimerEdge()
     local ok, err = Safe.Run(function(scope)
         scope:PushStyleColor(ImGuiCol_Button,        COL_BTN);
         scope:PushStyleColor(ImGuiCol_ButtonHovered, COL_BTN_HOVER);
@@ -419,6 +439,36 @@ local function DrawCollapseButton()
         end
         if imgui.IsItemHovered() then
             imgui.SetTooltip('Collapse');
+        end
+
+        local pocketW = imgui.CalcTextSize('Pocket');
+        if type(pocketW) == 'table' then pocketW = pocketW[1] or pocketW.x; end
+        if type(pocketW) == 'userdata' then pocketW = pocketW.x; end
+        pocketW = tonumber(pocketW) or 42;
+        local frameX = 4;
+        local style = imgui.GetStyle();
+        if style and style.FramePadding then
+            local fp = style.FramePadding;
+            if type(fp) == 'table' then
+                frameX = fp[1] or fp.x or frameX;
+            elseif type(fp) == 'userdata' then
+                frameX = fp.x or frameX;
+            end
+        end
+        local btnW = pocketW + frameX * 2;
+        imgui.SameLine(0, 0);
+        local avail = imgui.GetContentRegionAvail();
+        if type(avail) == 'table' then avail = avail[1] or avail.x; end
+        if type(avail) == 'userdata' then avail = avail.x; end
+        if type(avail) == 'number' and avail > btnW then
+            imgui.SetCursorPosX(imgui.GetCursorPosX() + avail - btnW);
+        end
+        local open = popouts.IsPocketOpen() == true;
+        if imgui.SmallButton('Pocket##vtPocket') then
+            popouts.TogglePocket();
+        end
+        if imgui.IsItemHovered() then
+            imgui.SetTooltip(open and 'Close pocket' or 'Open pocket');
         end
     end);
     if not ok then error(err); end
@@ -811,8 +861,9 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
     local popX = mainWinPos.x;
 
     local ok, err = Safe.Run(function(scope)
-    scope:PushStyleColor(ImGuiCol_WindowBg,      COL_WINDOW_BG);
-    scope:PushStyleColor(ImGuiCol_Border,        COL_WINDOW_BORDER);
+    local popA = TimersMenuOpacity(cfg);
+    scope:PushStyleColor(ImGuiCol_WindowBg,      { COL_WINDOW_BG[1], COL_WINDOW_BG[2], COL_WINDOW_BG[3], FadeAlpha(COL_WINDOW_BG[4], popA, 0.85) });
+    scope:PushStyleColor(ImGuiCol_Border,        { COL_WINDOW_BORDER[1], COL_WINDOW_BORDER[2], COL_WINDOW_BORDER[3], FadeAlpha(COL_WINDOW_BORDER[4], popA, 0.85) });
     scope:PushStyleColor(ImGuiCol_Header,        COL_HEADER);
     scope:PushStyleColor(ImGuiCol_HeaderHovered, COL_HEADER_HOVER);
     scope:PushStyleColor(ImGuiCol_HeaderActive,  COL_HEADER_ACTIVE);
@@ -843,7 +894,7 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
         end
 
         if side == 'below' then
-            DrawCollapseButton();
+            DrawTimerEdge();
             imgui.Separator();
         end
 
@@ -864,7 +915,7 @@ function M.DrawTimersPopup(fontSize, colorCfg, rounding)
 
         if side == 'above' then
             imgui.Separator();
-            DrawCollapseButton();
+            DrawTimerEdge();
         end
 
         -- Measure actual window height for the smooth position lerp.

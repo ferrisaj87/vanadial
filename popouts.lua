@@ -75,6 +75,11 @@ local pocketVisible = false;
 local pocketReady   = false;
 local pocketPosX    = nil;
 local pocketPosY    = nil;
+local pocketTrackX  = nil;
+local pocketTrackY  = nil;
+local pocketTrackH  = nil;
+local pocketTrackEntries = nil;
+local pocketTimerLatch   = false;
 
 local function NewWatch()
     return { accum = 0, running = false, mark = nil };
@@ -400,7 +405,23 @@ end
 local function PocketHide()
     if not pocketVisible then return; end
     pocketVisible = false;
+    pocketTrackX, pocketTrackY, pocketTrackH = nil, nil, nil;
+    pocketTrackEntries = nil;
+    pocketTimerLatch = false;
     PersistPocket();
+end
+
+function M.IsPocketOpen()
+    return pocketVisible == true;
+end
+
+function M.TogglePocket()
+    if pocketVisible then
+        PocketHide();
+        return false;
+    end
+    PocketShow();
+    return true;
 end
 
 local function PocketAdd(key)
@@ -700,6 +721,28 @@ local function StatusOf(row)
     if row.isDocking then return 'DOCKING', row.cdColor or timers.colorDocking; end
     if row.isTransit then return 'IN-TRANSIT', row.cdColor or timers.colorGoldDark; end
     return nil, nil;
+end
+
+local function Clamp01(v, fallback)
+    v = tonumber(v);
+    if v == nil then v = fallback; end
+    if v < 0 then return 0; end
+    if v > 1 then return 1; end
+    return v;
+end
+
+-- Keeps the current look at the slider's default, and fades to clear at 0.
+local function FadeAlpha(baseAlpha, opacity, designed)
+    if not designed or designed <= 0 then return 0; end
+    local a = baseAlpha * opacity / designed;
+    if a < 0 then return 0; end
+    if a > 1 then return 1; end
+    return a;
+end
+
+local function ReadOpacity(key, fallback)
+    local cfg = gConfig;
+    return Clamp01(cfg and cfg[key], fallback);
 end
 
 local function AlignRight(width)
@@ -1487,7 +1530,7 @@ local function CountdownRowWidth(scale, index, btnH, gap)
     return width;
 end
 
-local function DrawPocketTools(scope, scale, font, fontSize)
+local function DrawPocketTools(scope, scale, font, fontSize, flushBottom)
     if font then scope:PushFont(font, fontSize); end
     local lineH = imgui.GetTextLineHeight();
     local btnH = lineH + 4;
@@ -1510,18 +1553,21 @@ local function DrawPocketTools(scope, scale, font, fontSize)
     local winW, winH = imgui.GetWindowSize();
     if type(winW) ~= 'number' or winW < 8 then winW = 220; end
     local bottom = originY + blockH;
-    if type(winY) == 'number' and type(winH) == 'number' and winH > 8 then
+    local bandRound = 0;
+    if flushBottom and type(winY) == 'number' and type(winH) == 'number' and winH > 8 then
         bottom = winY + winH;
+        bandRound = 8 * scale;
     end
     local dl = imgui.GetWindowDrawList();
     -- The window clip stops at the padding, which left a strip of the normal background.
     dl:PushClipRect({ winX - 2, originY }, { winX + winW + 2, bottom + 2 }, false);
     _pa[1] = winX; _pa[2] = originY;
     _pb[1] = winX + winW; _pb[2] = bottom;
-    dl:AddRectFilled(_pa, _pb, imgui.GetColorU32(COL_POCKET_BG), 8 * scale, ImDrawFlags_RoundCornersBottom);
+    local pocketA = ReadOpacity('vanaTimePocketOpacity', 0.92);
+    dl:AddRectFilled(_pa, _pb, imgui.GetColorU32(Rgba(COL_POCKET_BG, FadeAlpha(COL_POCKET_BG[4], pocketA, 0.92))), bandRound, flushBottom and ImDrawFlags_RoundCornersBottom or 0);
     dl:PopClipRect();
     _pa[1] = winX + 8; _pa[2] = originY; _pb[1] = winX + winW - 8; _pb[2] = originY;
-    dl:AddLine(_pa, _pb, imgui.GetColorU32({ 0.80, 0.67, 0.31, 0.55 }), 1.0);
+    dl:AddLine(_pa, _pb, imgui.GetColorU32({ 0.80, 0.67, 0.31, FadeAlpha(0.55, pocketA, 0.92) }), 1.0);
 
     local rowX, rowY = imgui.GetCursorScreenPos();
     for i = 1, rows do
@@ -1656,6 +1702,16 @@ local function WindowScale(cfg, key)
     return ClampScale(cfg.vanaTimeScale, 1.0);
 end
 
+-- Designed window alpha. A stored opacity of this value matches the hardcoded look.
+local POPOUT_OPACITY = 0.92;
+
+local function WindowOpacity(cfg, key)
+    local map = cfg.popoutOpacities;
+    local custom = map and tonumber(map[key]);
+    if custom then return Clamp01(custom, POPOUT_OPACITY); end
+    return POPOUT_OPACITY;
+end
+
 local function DefaultPos(key)
     local h = 0;
     for i = 1, #key do
@@ -1684,8 +1740,9 @@ local function DrawOne(key)
         if not isGuildCard then
             scope:PushStyleVar(ImGuiStyleVar_WindowMinSize, { math.floor(120 * scale), 0 });
         end
-        scope:PushStyleColor(ImGuiCol_WindowBg, COL_WINDOW_BG);
-        scope:PushStyleColor(ImGuiCol_Border, COL_BORDER);
+        local popA = WindowOpacity(cfg, key);
+        scope:PushStyleColor(ImGuiCol_WindowBg, Rgba(COL_WINDOW_BG, FadeAlpha(COL_WINDOW_BG[4], popA, POPOUT_OPACITY)));
+        scope:PushStyleColor(ImGuiCol_Border, Rgba(COL_BORDER, FadeAlpha(COL_BORDER[4], popA, POPOUT_OPACITY)));
 
         local posKey = PosKey(key);
         local applied = ApplyWindowPosition(posKey);
@@ -1730,8 +1787,9 @@ local function DrawPocket()
         });
         scope:PushStyleVar(ImGuiStyleVar_ItemSpacing, { math.floor(6 * scale), math.max(2, math.floor(3 * scale)) });
         scope:PushStyleVar(ImGuiStyleVar_WindowMinSize, { math.floor(140 * scale), 0 });
-        scope:PushStyleColor(ImGuiCol_WindowBg, COL_WINDOW_BG);
-        scope:PushStyleColor(ImGuiCol_Border, COL_BORDER);
+        local pocketA = ReadOpacity('vanaTimePocketOpacity', 0.92);
+        scope:PushStyleColor(ImGuiCol_WindowBg, Rgba(COL_WINDOW_BG, FadeAlpha(COL_WINDOW_BG[4], pocketA, 0.92)));
+        scope:PushStyleColor(ImGuiCol_Border, Rgba(COL_BORDER, FadeAlpha(COL_BORDER[4], pocketA, 0.92)));
 
         pocketItemRight = 0;
         pocketNaturalW = 0;
@@ -1745,10 +1803,30 @@ local function DrawPocket()
         local posKey = PosKey('pocket');
         local hadSaved = gConfig.windowPositions and gConfig.windowPositions[posKey] ~= nil;
         local placeDefault = (not hadSaved) and needsDefault['pocket'] == true;
+        local toolsTop = (cfg.pocketToolsPlace or 'bottom') == 'top';
+        local expandUp = (cfg.pocketTimerExpand or 'down') == 'up';
+        if pocketTrackEntries ~= nil and #pocketOrder ~= pocketTrackEntries then
+            pocketTimerLatch = true;
+        end
         ApplyWindowPosition(posKey);
         if placeDefault then
             local x, y = DefaultPos('pocket');
             imgui.SetNextWindowPos({x, y}, ImGuiCond_Always);
+        end
+        -- A pinned timer keeps the top edge (expand down) or the bottom edge (expand up).
+        -- Stopwatch rows still follow their own placement: top grows upward, bottom grows downward.
+        if pocketTrackX and pocketTrackY and pocketTrackH
+            and height ~= pocketTrackH and not imgui.IsMouseDragging(0) then
+            local anchorBottom = false;
+            if pocketTimerLatch then
+                anchorBottom = expandUp;
+                pocketTimerLatch = false;
+            elseif toolsTop then
+                anchorBottom = true;
+            end
+            if anchorBottom then
+                imgui.SetNextWindowPos({ pocketTrackX, pocketTrackY + pocketTrackH - height }, ImGuiCond_Always);
+            end
         end
         needsDefault['pocket'] = nil;
 
@@ -1781,7 +1859,18 @@ local function DrawPocket()
         -- The header buttons sit on the window's right edge, so they are not content.
         pocketItemRight = 0;
 
-        if pocketOrder[1] ~= nil then
+        local hasEntries = pocketOrder[1] ~= nil;
+        local toolFont = math.max(8, math.floor(fontSize * 0.85));
+        local function DrawTools()
+            imgui.Dummy({ 1, math.max(3, math.floor(4 * scale)) });
+            DrawPocketTools(scope, scale, font, toolFont, (not toolsTop) or not hasEntries);
+        end
+
+        if toolsTop then
+            DrawTools();
+        end
+
+        if hasEntries then
             DrawDivider(scope);
             for i, key in ipairs(pocketOrder) do
                 if i > 1 then DrawDivider(scope); end
@@ -1792,9 +1881,9 @@ local function DrawPocket()
             end
         end
 
-        imgui.Dummy({ 1, math.max(3, math.floor(4 * scale)) });
-        local toolFont = math.max(8, math.floor(fontSize * 0.85));
-        DrawPocketTools(scope, scale, font, toolFont);
+        if not toolsTop then
+            DrawTools();
+        end
 
         local winX = imgui.GetWindowPos();
         if type(winX) == 'table' then winX = winX[1] or winX.x; end
@@ -1809,6 +1898,21 @@ local function DrawPocket()
         local spacingY = math.max(2, math.floor(3 * scale));
         local bottomPad = math.max(3, math.floor(4 * scale));
         pocketLaidOutH = math.max(bottomPad, imgui.GetCursorPosY() - spacingY + bottomPad);
+
+        local trackX, trackY = imgui.GetWindowPos();
+        if type(trackX) == 'table' then
+            trackY = trackX[2] or trackX.y;
+            trackX = trackX[1] or trackX.x;
+        elseif type(trackX) == 'userdata' then
+            trackY = trackX.y;
+            trackX = trackX.x;
+        end
+        if type(trackX) == 'number' and type(trackY) == 'number' then
+            -- Remember the size requested this frame, so the next frame can
+            -- tell a real content change from the window's own measurement.
+            pocketTrackX, pocketTrackY, pocketTrackH = trackX, trackY, height;
+            pocketTrackEntries = #pocketOrder;
+        end
     end);
     if not ok then error(err); end
     return hide, removed;
