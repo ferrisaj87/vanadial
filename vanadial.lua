@@ -25,7 +25,7 @@
 
 addon.name    = 'vanadial';
 addon.author  = 'Ferris';
-addon.version = '1.7.0';
+addon.version = '1.7.1';
 addon.desc    = "Vana'Dial — Vana'diel time, weather, moon phase, transport and guild timers.";
 addon.link    = 'https://github.com/ferrisaj87/vanadial';
 
@@ -409,7 +409,8 @@ function GetBaseWindowFlags(lockPositions)
             ImGuiWindowFlags_NoNav,
             ImGuiWindowFlags_NoBackground,
             ImGuiWindowFlags_NoBringToFrontOnFocus,
-            ImGuiWindowFlags_NoDocking
+            ImGuiWindowFlags_NoDocking,
+            ImGuiWindowFlags_NoSavedSettings
         );
     end
     if lockPositions then
@@ -437,21 +438,50 @@ function ApplyWindowPosition(windowName)
     return false;
 end
 
-function SaveWindowPosition(windowName)
-    if not gConfig or not _allowPositionSave then return; end
-    local x, y = imgui.GetWindowPos();
-    -- Allow monitors left/above the primary display while rejecting corrupt data.
-    if type(x) ~= 'number' or type(y) ~= 'number' then return; end
-    if x < -32000 or y < -32000 or x > 32000 or y > 32000 then return; end
+local _posDragWindow = nil;
+
+-- Write an exact position. Used for a drag and for a calculated edge anchor.
+function CommitWindowPosition(windowName, x, y)
+    if not gConfig or not _allowPositionSave then return false; end
+    if type(x) == 'table' then
+        y = x[2] or x.y;
+        x = x[1] or x.x;
+    end
+    x, y = tonumber(x), tonumber(y);
+    if not x or not y then return false; end
+    if x < -32000 or y < -32000 or x > 32000 or y > 32000 then return false; end
     if not gConfig.windowPositions then gConfig.windowPositions = T{}; end
     local saved = gConfig.windowPositions[windowName];
     if not saved then
         gConfig.windowPositions[windowName] = T{ x = x, y = y };
         MarkSettingsDirty();
     elseif saved.x ~= x or saved.y ~= y then
-        saved.x = x; saved.y = y;
+        saved.x = x;
+        saved.y = y;
         MarkSettingsDirty();
     end
+    return true;
+end
+
+-- A resting window reports a slightly different position after auto-resize.
+-- Writing that every frame walks the window on each reload. Only a drag is a
+-- real move. The release frame is included so the last pixel is kept.
+function SaveWindowPosition(windowName)
+    if not gConfig or not _allowPositionSave then return false; end
+    local dragging = imgui.IsMouseDragging(0, 2.0);
+    if not dragging then
+        if _posDragWindow ~= windowName then return false; end
+        _posDragWindow = nil;
+    else
+        if _posDragWindow == nil then
+            if not imgui.IsWindowHovered() then return false; end
+            _posDragWindow = windowName;
+        elseif _posDragWindow ~= windowName then
+            return false;
+        end
+    end
+    local x, y = imgui.GetWindowPos();
+    return CommitWindowPosition(windowName, x, y);
 end
 
 -- ── ImGui compatibility shims ─────────────────────────────────────────────────

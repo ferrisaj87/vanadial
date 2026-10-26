@@ -268,7 +268,7 @@ function M.Draw(openFlag, setOpen)
 
             CB('Enabled', 'showVanaDial');
             CB('Minimalist Mode', 'vanaTimeMinimalist');
-            Tip("Show a single compact bar: Vana'diel time, today's element, moon %, tomorrow, and zone weather. The full window opens on hover or click, then returns after the Return Delay.");
+            Tip("Show a single compact bar: Vana'diel time, today's element circle with the moon percent, tomorrow, and zone weather. The full window opens on hover or click, then returns after the Return Delay.");
             if gConfig.vanaTimeMinimalist == true then
                 imgui.Indent(16);
                 local scaleBefore = tonumber(gConfig.vanaTimeMinimalScale) or 1.0;

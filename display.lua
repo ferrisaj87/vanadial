@@ -13,7 +13,7 @@
 *   └─────────────────────────────────────────────────────────┘
 *
 * Minimalist mode collapses that to one row, with its own scale:
-*   07:49  (day) 57%  >  (day) 60%      [weather]
+*   07:49  (day 57)  >  (day 60)      [weather]
 ]]--
 
 require('common');
@@ -743,7 +743,7 @@ local minimalScaleWasExpanded = false;
 local expandAnchorBottom = nil;
 local lastExpandContentH = nil;
 
-local minimalFontCache = { size = -1, pctW = 0 };
+local minimalFontCache = { size = -1, pctFont = 6, pctW = 0, pctH = 0 };
 local minimalTimeCache = { key = '', size = -1, w = 0, str = '' };
 
 local function ConfigIsOpen()
@@ -946,16 +946,19 @@ local function ResolveBarWeather(cfg, weatherId)
     return id, testId and testAlpha or 1;
 end
 
--- Compact bar: HH:MM, today dot, moon %, arrow, tomorrow dot, moon %, weather.
+-- Compact bar: HH:MM, today circle with the moon number, arrow, tomorrow circle, weather.
 -- Returns content width and height (window padding is applied by the caller).
 local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, weekday, moonDay, weatherId, scale, colPad)
     local function S(n) return math.max(1, math.floor(n * scale)); end
     local fontSize = math.max(8, math.floor(13 * scale));
     local gap = S(5);
     local weatherGap = math.max(S(22), math.floor(fontSize * 1.8));
-    local contentH = fontSize + 4;
-    local dotR = math.max(3, math.floor(fontSize * 0.30));
-    local arrowH = math.max(7, math.floor(contentH * 0.62));
+    local textH = fontSize + 4;
+    -- Day circles use the moon's old size. The number is fitted across that disc.
+    local dayIcon = math.max(textH, math.floor(fontSize * 1.55));
+    local contentH = dayIcon;
+    local textBorder = math.max(2, math.floor(scale + 1));
+    local arrowH = math.max(7, math.floor(textH * 0.62));
     local arrowW = math.max(7, math.floor(arrowH * 0.85));
 
     local timeKey = vtHour * 60 + vtMin;
@@ -965,17 +968,28 @@ local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, 
         minimalTimeCache.str = string.format('%02d:%02d', vtHour, vtMin);
         minimalTimeCache.w = imtext.Measure(minimalTimeCache.str, fontSize);
     end
-    if minimalFontCache.size ~= fontSize then
-        minimalFontCache.size = fontSize;
-        minimalFontCache.pctW = imtext.Measure('100%', fontSize);
+    if minimalFontCache.size ~= dayIcon then
+        local size = math.max(5, dayIcon);
+        local w, h = imtext.Measure('100', size);
+        local pad = textBorder * 2 + math.max(1, math.floor(dayIcon * 0.04));
+        local limit = dayIcon - pad;
+        while size > 5 and type(w) == 'number' and type(h) == 'number' and (w > limit or h > limit) do
+            size = size - 1;
+            w, h = imtext.Measure('100', size);
+        end
+        size = size + 2;
+        w, h = imtext.Measure('100', size);
+        minimalFontCache.size = dayIcon;
+        minimalFontCache.pctFont = size;
+        minimalFontCache.pctW = (type(w) == 'number') and w or dayIcon;
+        minimalFontCache.pctH = (type(h) == 'number') and h or size;
     end
+    local pctFont = minimalFontCache.pctFont;
     local timeW = minimalTimeCache.w;
-    local pctW = minimalFontCache.pctW;
-    local dotD = dotR * 2;
 
     local wxId, wxAlpha = ResolveBarWeather(cfg, weatherId);
     local wxTex, wxDouble = nil, false;
-    local wxIcon = contentH;
+    local wxIcon = textH;
     local wxW = 0;
     if wxId ~= nil then
         wxTex = GetTexPtr(textures[data.WEATHER_TO_ELEMENT[wxId]]);
@@ -985,7 +999,7 @@ local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, 
         end
     end
 
-    local contentW = timeW + gap + dotD + gap + pctW + gap + arrowW + gap + dotD + gap + pctW;
+    local contentW = timeW + gap + dayIcon + gap + arrowW + gap + dayIcon;
     if wxTex then
         contentW = contentW + weatherGap + wxW;
     end
@@ -1026,37 +1040,65 @@ local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, 
     end
     x = x + timeW + gap;
 
-    local function DrawDot(wd, atX, alpha)
-        local argb = colorCfg[data.ELEM_KEYS[wd]] or 0xFFFFFFFF;
-        local ring = 0xCC000000;
-        if alpha then
-            argb = WithAlpha(argb, alpha);
-            ring = WithAlpha(0xFF000000, 0.8 * alpha);
+    local function DrawThickText(text, x, y, textArgb, outlineArgb)
+        local font = imtext.GetFont();
+        local fs = pctFont + 2;
+        local outU32 = ToU32(outlineArgb);
+        local textU32 = ToU32(textArgb);
+        local r = textBorder;
+        local reach = r * r + r;
+        for oy = -r, r do
+            for ox = -r, r do
+                if (ox ~= 0 or oy ~= 0) and (ox * ox + oy * oy) <= reach then
+                    _textPos[1] = x + ox;
+                    _textPos[2] = y + oy;
+                    if font then
+                        drawList:AddText(font, fs, _textPos, outU32, text);
+                    else
+                        drawList:AddText(_textPos, outU32, text);
+                    end
+                end
+            end
         end
-        local cx = atX + dotR;
-        local cy = cy0 + contentH * 0.5;
-        DLCircleFilled(drawList, cx, cy, dotR + 1, ToU32(ring), 16);
-        DLCircleFilled(drawList, cx, cy, dotR, ToU32(argb), 16);
-        Tip(atX, cy0, dotD, contentH, data.GetWeekdayName(wd));
+        _textPos[1] = x;
+        _textPos[2] = y;
+        if font then
+            drawList:AddText(font, fs, _textPos, textU32, text);
+        else
+            drawList:AddText(_textPos, textU32, text);
+        end
     end
 
-    local function DrawPct(md, atX, alpha)
+    local function DrawDayMoon(wd, md, atX, alpha)
         local pct = data.CalcMoonPercent(md);
-        local label = string.format('%d%%', pct);
+        local label = string.format('%d', pct);
+        local argb = colorCfg[data.ELEM_KEYS[wd]] or 0xFFFFFFFF;
         local col = MoonPercentArgb(md, colorCfg);
         local outline = 0xFF000000;
+        local ring = 0xFF000000;
         if alpha then
+            argb = WithAlpha(argb, alpha);
             col = WithAlpha(col, alpha);
             outline = WithAlpha(outline, alpha);
+            ring = WithAlpha(ring, 0.85 * alpha);
         end
-        DrawTextWithOutline(drawList, label, atX, textY, col, outline, fontSize);
-        Tip(atX, cy0, pctW, contentH, MoonTip(md, pct));
+        local iy = cy0 + math.floor((contentH - dayIcon) / 2);
+        local cx = atX + dayIcon * 0.5;
+        local cy = iy + dayIcon * 0.5;
+        local radius = dayIcon * 0.5;
+        local edge = math.max(2, math.floor(scale + 0.5));
+        DLCircleFilled(drawList, cx, cy, radius, ToU32(ring), 24);
+        DLCircleFilled(drawList, cx, cy, math.max(1, radius - edge), ToU32(argb), 24);
+        local tw, th = imtext.Measure(label, pctFont);
+        if type(tw) ~= 'number' then tw = minimalFontCache.pctW; end
+        if type(th) ~= 'number' then th = minimalFontCache.pctH; end
+        DrawThickText(label, atX + math.floor((dayIcon - tw) / 2), iy + math.floor((dayIcon - th) / 2), col, outline);
+        local dayName = data.GetWeekdayName(wd);
+        Tip(atX, iy, dayIcon, dayIcon, dayName .. '   ' .. MoonTip(md, pct));
     end
 
-    DrawDot(weekday, x);
-    x = x + dotD + gap;
-    DrawPct(moonDay, x);
-    x = x + pctW + gap;
+    DrawDayMoon(weekday, moonDay, x);
+    x = x + dayIcon + gap;
 
     local arrY = cy0 + math.floor((contentH - arrowH) / 2);
     local arrTex = GetTexPtr(arrowRightTex);
@@ -1069,12 +1111,10 @@ local function DrawMinimalBar(drawList, cx0, cy0, cfg, colorCfg, vtHour, vtMin, 
 
     local nextWeekday = (weekday + 1) % 8;
     local nextMoon = (moonDay + 1) % data.VD_MOON_DAYS;
-    DrawDot(nextWeekday, x, 0.55);
-    x = x + dotD + gap;
-    DrawPct(nextMoon, x, 0.55);
+    DrawDayMoon(nextWeekday, nextMoon, x, 0.55);
 
     if wxTex then
-        x = x + pctW + weatherGap;
+        x = x + dayIcon + weatherGap;
         local iy = cy0 + math.floor((contentH - wxIcon) / 2);
         local tint = ToU32(WithAlpha(0xFFFFFFFF, wxAlpha));
         DLImage(drawList, wxTex, x, iy, x + wxIcon, iy + wxIcon, tint);

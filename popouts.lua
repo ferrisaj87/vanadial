@@ -79,7 +79,9 @@ local pocketTrackX  = nil;
 local pocketTrackY  = nil;
 local pocketTrackH  = nil;
 local pocketTrackEntries = nil;
+local pocketTrackTools   = nil;
 local pocketTimerLatch   = false;
+local pocketToolLatch    = false;
 
 local function NewWatch()
     return { accum = 0, running = false, mark = nil };
@@ -396,6 +398,9 @@ end
 local function PocketShow()
     if pocketVisible then return; end
     pocketVisible = true;
+    if gConfig and gConfig.appliedPositions then
+        gConfig.appliedPositions[PosKey('pocket')] = nil;
+    end
     if not (gConfig and gConfig.windowPositions and gConfig.windowPositions[PosKey('pocket')]) then
         ArmPosition('pocket');
     end
@@ -407,7 +412,9 @@ local function PocketHide()
     pocketVisible = false;
     pocketTrackX, pocketTrackY, pocketTrackH = nil, nil, nil;
     pocketTrackEntries = nil;
+    pocketTrackTools = nil;
     pocketTimerLatch = false;
+    pocketToolLatch = false;
     PersistPocket();
 end
 
@@ -1805,27 +1812,40 @@ local function DrawPocket()
         local placeDefault = (not hadSaved) and needsDefault['pocket'] == true;
         local toolsTop = (cfg.pocketToolsPlace or 'bottom') == 'top';
         local expandUp = (cfg.pocketTimerExpand or 'down') == 'up';
+        local toolRows = math.max(#watches, #countdowns);
+        -- Count changes only. The first layout after a reload is taller than the
+        -- placeholder size, and anchoring that would walk the window upward.
         if pocketTrackEntries ~= nil and #pocketOrder ~= pocketTrackEntries then
             pocketTimerLatch = true;
+        end
+        if pocketTrackTools ~= nil and toolRows ~= pocketTrackTools then
+            pocketToolLatch = true;
         end
         ApplyWindowPosition(posKey);
         if placeDefault then
             local x, y = DefaultPos('pocket');
             imgui.SetNextWindowPos({x, y}, ImGuiCond_Always);
         end
-        -- A pinned timer keeps the top edge (expand down) or the bottom edge (expand up).
-        -- Stopwatch rows still follow their own placement: top grows upward, bottom grows downward.
         if pocketTrackX and pocketTrackY and pocketTrackH
             and height ~= pocketTrackH and not imgui.IsMouseDragging(0) then
             local anchorBottom = false;
-            if pocketTimerLatch then
-                anchorBottom = expandUp;
-                pocketTimerLatch = false;
-            elseif toolsTop then
+            if pocketTimerLatch and expandUp then
+                anchorBottom = true;
+            elseif pocketToolLatch and toolsTop then
                 anchorBottom = true;
             end
+            pocketTimerLatch = false;
+            pocketToolLatch = false;
             if anchorBottom then
-                imgui.SetNextWindowPos({ pocketTrackX, pocketTrackY + pocketTrackH - height }, ImGuiCond_Always);
+                local nx = pocketTrackX;
+                local ny = pocketTrackY + pocketTrackH - height;
+                imgui.SetNextWindowPos({ nx, ny }, ImGuiCond_Always);
+                if CommitWindowPosition then
+                    CommitWindowPosition(posKey, nx, ny);
+                end
+                if gConfig.appliedPositions then
+                    gConfig.appliedPositions[posKey] = true;
+                end
             end
         end
         needsDefault['pocket'] = nil;
@@ -1837,8 +1857,13 @@ local function DrawPocket()
 
         local visible = scope:BeginWindow("Vana'Dial Pocket##vd", true, POCKET_FLAGS);
         if not visible then return; end
-        if hadSaved or placeDefault then
-            SaveWindowPosition(posKey);
+        if placeDefault then
+            local dx, dy = DefaultPos('pocket');
+            if CommitWindowPosition then
+                CommitWindowPosition(posKey, dx, dy);
+            end
+        end
+        if SaveWindowPosition(posKey) then
             NotePocketPosition();
         end
 
@@ -1912,6 +1937,7 @@ local function DrawPocket()
             -- tell a real content change from the window's own measurement.
             pocketTrackX, pocketTrackY, pocketTrackH = trackX, trackY, height;
             pocketTrackEntries = #pocketOrder;
+            pocketTrackTools = math.max(#watches, #countdowns);
         end
     end);
     if not ok then error(err); end
